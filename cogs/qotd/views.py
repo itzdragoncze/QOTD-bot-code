@@ -1,6 +1,8 @@
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
+if TYPE_CHECKING:
+    from .cog import Qotd
 import discord
 from translations import t, DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
 from .constants import (

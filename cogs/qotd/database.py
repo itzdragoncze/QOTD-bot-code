@@ -22,6 +22,7 @@ from .constants import (
     normalize_question,
     parse_question_input,
 )
+from .views import suggestion_review_view
 
 
 class QotdDatabaseMixin:

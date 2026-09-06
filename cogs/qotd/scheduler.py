@@ -8,6 +8,7 @@ from .constants import (
     logger,
     COLOR_POST,
     COLOR_DANGER,
+    COLOR_SUGGESTIONS,
     DEFAULT_SCHEDULED_TIME,
     QOTD_TIMEZONE,
     MAX_QUESTION_LENGTH,

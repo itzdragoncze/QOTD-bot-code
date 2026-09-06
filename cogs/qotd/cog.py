@@ -13,6 +13,7 @@ from .constants import (
     DATABASE_FILE,
     DEFAULT_SCHEDULED_TIME,
     MAX_QUEUE_QUESTIONS,
+    MAX_TOTAL_QUESTIONS,
     MAX_QUESTION_LENGTH,
     MAX_BATCH_ADD_QUESTIONS,
     parse_question_input,

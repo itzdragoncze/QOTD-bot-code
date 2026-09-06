@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 import discord
-from translations import t, DEFAULT_LANGUAGE
+from translations import t, DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
 from .constants import (
     logger,
     COLOR_QUEUE,
@@ -11,6 +11,9 @@ from .constants import (
     COLOR_LEADERBOARD,
     COLOR_DETAIL,
     DEFAULT_SCHEDULED_TIME,
+    MAX_QUEUE_QUESTIONS,
+    MAX_TOTAL_QUESTIONS,
+    MAX_PENDING_SUGGESTIONS,
     format_discord_timestamp,
 )
 

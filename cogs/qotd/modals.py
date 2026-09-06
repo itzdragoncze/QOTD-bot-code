@@ -1,15 +1,23 @@
-from typing import Any, Dict, List, Optional, Union
+import re
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING
 import discord
 from translations import t
 from .constants import (
     logger,
+    COLOR_DETAIL,
+    QOTD_TIMEZONE,
     MAX_QUESTION_LENGTH,
     MAX_QUEUE_QUESTIONS,
     MAX_TOTAL_QUESTIONS,
     MAX_BATCH_ADD_QUESTIONS,
     parse_question_input,
     normalize_question,
+    is_admin,
 )
+
+if TYPE_CHECKING:
+    from .cog import Qotd
 
 class BaseModal(discord.ui.Modal):
     """Base modal that logs errors and sends an ephemeral error message to the user
@@ -249,6 +257,7 @@ class AddQuestionModal(BaseModal):
         embed = await self.qotd.build_questions_embed(self.guild_id, "to_ask", self.current_page, channel_id=self.channel_id, lang=user_lang)
         total_pages = await self.qotd.question_page_count(self.guild_id, "to_ask", channel_id=self.channel_id)
         page_items = await self.qotd.get_questions_page(self.guild_id, "to_ask", self.current_page, channel_id=self.channel_id)
+        from .views import QotdPanelView
         view = QotdPanelView(
             self.qotd,
             section="to_ask",
@@ -308,6 +317,7 @@ class EditQuestionModal(BaseModal):
         updated_row = await self.qotd.get_question(self.guild_id, self.question_id)
         if updated_row:
             embed = await self.qotd.build_question_detail_embed(self.guild_id, updated_row, lang=user_lang)
+            from .views import QuestionDetailView
             view = QuestionDetailView(self.qotd, self.guild_id, updated_row, return_section=self.return_section, return_page=self.return_page, channel_id=self.channel_id, lang=user_lang)
             await interaction.edit_original_response(embed=embed, view=view)
 
@@ -368,6 +378,7 @@ class EditSuggestionModal(BaseModal):
                 embed = await self.qotd.build_suggestions_embed(self.guild_id, target_page, lang=user_lang)
                 page_items = await self.qotd.get_suggestions_page(self.guild_id, target_page)
                 channels = await self.qotd.get_qotd_channels(self.guild_id)
+                from .views import QotdPanelView
                 view = QotdPanelView(
                     self.qotd,
                     section="suggestions",
@@ -463,6 +474,7 @@ class RejectSuggestionModal(BaseModal):
                 if reason:
                     emb.add_field(name=t(user_lang, "sugg_dm_rejected_reason"), value=reason, inline=False)
 
+                from .views import SuggestionDeclinedView
                 view = SuggestionDeclinedView(
                     self.qotd,
                     self.guild_id,
@@ -526,6 +538,7 @@ class SearchQuestionsModal(BaseModal):
                 inline=False,
             )
 
+        from .views import SearchResultsView
         view = SearchResultsView(self.qotd, self.guild_id, results, search_str, return_section=self.status_filter, channel_id=self.channel_id, lang=user_lang)
         await interaction.edit_original_response(embed=embed, view=view)
 
@@ -570,6 +583,7 @@ class QotdHourModal(BaseModal):
             await self.qotd.update_qotd_channel(self.channel_id, scheduled_time=scheduled_time)
 
         embed = await self.qotd.build_channel_manage_embed(self.guild_id, self.channel_id, lang=user_lang)
+        from .views import ChannelManageView
         view = ChannelManageView(self.qotd, self.guild_id, self.channel_id, lang=user_lang)
         await interaction.response.edit_message(embed=embed, view=view)
         await interaction.followup.send(t(user_lang, "time_updated", time=scheduled_time), ephemeral=True)
@@ -600,6 +614,8 @@ class QotdThresholdModal(BaseModal):
         val = int(raw)
         await self.qotd.update_qotd_channel(self.channel_id, low_queue_threshold=val)
         embed = await self.qotd.build_channel_manage_embed(self.guild_id, self.channel_id, lang=user_lang)
+        from .views import ChannelManageView
+        from .views import ChannelManageView
         view = ChannelManageView(self.qotd, self.guild_id, self.channel_id, lang=user_lang)
         await interaction.response.edit_message(embed=embed, view=view)
         await interaction.followup.send(t(user_lang, "threshold_updated", threshold=val), ephemeral=True)
