@@ -1,0 +1,25 @@
+# Environment & Secrets
+.env
+*.env
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# SQLite Databases
+*.db
+*.db-wal
+*.db-shm
+*.bak
+
+# Virtual environment
+venv/
+.venv/
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
