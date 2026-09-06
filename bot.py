@@ -28,7 +28,6 @@ class Bot(commands.Bot):
         self._stale_cleanup_done: bool = False
 
     async def setup_hook(self):
-        await self.load_extension("cogs.general")
         await self.load_extension("cogs.qotd")
         # Sync commands globally once — works for all guilds including future ones
         synced = await self.tree.sync()
