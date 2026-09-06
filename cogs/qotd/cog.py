@@ -180,31 +180,6 @@ class Qotd(commands.Cog, QotdDatabaseMixin, QotdEmbedsMixin, QotdSchedulerMixin)
     # Slash Commands
     # -----------------------------------------------------------------------
 
-    @app_commands.command(name="qotd_language", description="Change bot language / Změnit jazyk bota")
-    @app_commands.guild_only()
-    @app_commands.checks.has_permissions(manage_guild=True)
-    @app_commands.describe(language="Select bot language / Vyberte jazyk bota")
-    @app_commands.choices(
-        language=[
-            app_commands.Choice(name="English 🇬🇧", value="en"),
-            app_commands.Choice(name="Čeština 🇨🇿", value="cs"),
-            app_commands.Choice(name="Español 🇪🇸", value="es"),
-            app_commands.Choice(name="Português 🇵🇹", value="pt"),
-            app_commands.Choice(name="Slovenčina 🇸🇰", value="sk"),
-            app_commands.Choice(name="Deutsch 🇩🇪", value="de"),
-            app_commands.Choice(name="Français 🇫🇷", value="fr"),
-        ]
-    )
-    async def qotd_language(self, interaction: discord.Interaction, language: app_commands.Choice[str]):
-        await interaction.response.defer(ephemeral=True)
-        new_lang = language.value
-        await self.set_guild_language(interaction.guild_id, new_lang)
-        lang_name = SUPPORTED_LANGUAGES.get(new_lang, new_lang)
-        user_lang = self.get_user_language(interaction, interaction.guild_id)
-        await interaction.followup.send(
-            t(user_lang, "lang_changed", language=lang_name),
-            ephemeral=True,
-        )
 
     @app_commands.command(name="qotd", description="Open interactive QOTD control panel / Otevřít ovládací panel QOTD")
     @app_commands.guild_only()
@@ -327,18 +302,7 @@ class Qotd(commands.Cog, QotdDatabaseMixin, QotdEmbedsMixin, QotdSchedulerMixin)
 
     @app_commands.command(name="qotd_suggest", description="Suggest a question for QOTD / Navrhnout otázku pro QOTD")
     @app_commands.guild_only()
-    @app_commands.describe(
-        channel="Target QOTD channel (optional) / Cílový QOTD kanál",
-        question="Your question (optional) / Vaše otázka",
-        note="Optional note for administrators (optional) / Volitelná poznámka",
-    )
-    async def qotd_suggest(
-        self,
-        interaction: discord.Interaction,
-        channel: Optional[str] = None,
-        question: Optional[str] = None,
-        note: Optional[str] = None,
-    ):
+    async def qotd_suggest(self, interaction: discord.Interaction):
         user_lang = self.get_user_language(interaction, interaction.guild_id)
         channels = await self.get_qotd_channels(interaction.guild_id)
         if not channels:
@@ -346,13 +310,7 @@ class Qotd(commands.Cog, QotdDatabaseMixin, QotdEmbedsMixin, QotdSchedulerMixin)
             return
 
         target_ch_id: Optional[int] = None
-        if channel:
-            qotd_ch = await self.find_qotd_channel(interaction.guild_id, channel)
-            if not qotd_ch:
-                await interaction.response.send_message(t(user_lang, "channel_not_qotd_generic"), ephemeral=True)
-                return
-            target_ch_id = qotd_ch["channel_id"]
-        elif interaction.channel_id in [c["channel_id"] for c in channels]:
+        if interaction.channel_id in [c["channel_id"] for c in channels]:
             target_ch_id = interaction.channel_id
 
         # The channel selection is done in the form
@@ -361,27 +319,9 @@ class Qotd(commands.Cog, QotdDatabaseMixin, QotdEmbedsMixin, QotdSchedulerMixin)
             interaction.guild_id,
             channels=channels,
             target_channel_id=target_ch_id,
-            prefilled_question=question,
-            prefilled_note=note,
             lang=user_lang,
         )
         await interaction.response.send_modal(modal)
-
-    @qotd_suggest.autocomplete("channel")
-    async def qotd_suggest_channel_autocomplete(
-        self, interaction: discord.Interaction, current: str
-    ) -> List[app_commands.Choice[str]]:
-        if not interaction.guild_id:
-            return []
-        channels = await self.get_qotd_channels(interaction.guild_id)
-        choices = []
-        for c in channels:
-            ch_id = c["channel_id"]
-            ch = interaction.guild.get_channel(ch_id) if interaction.guild else None
-            name = f"#{ch.name}" if ch else f"Channel {ch_id}"
-            if not current or current.lower() in name.lower() or current.lower() in str(ch_id):
-                choices.append(app_commands.Choice(name=name[:100], value=str(ch_id)))
-        return choices[:25]
 
     @app_commands.command(name="qotd_send", description="Send next QOTD from queue immediately / Ihned odeslat další otázku")
     @app_commands.guild_only()
