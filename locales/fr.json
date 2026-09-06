@@ -252,7 +252,7 @@
   "sugg_review_note": "Note",
   "sugg_review_pending": "🔵 En attente d'approbation",
   "sugg_sent_success": "Merci ! Votre suggestion a été soumise et attend l'approbation des administrateurs.",
-  "sugg_target_channel": "🎯 Salon cible",
+  "sugg_target_channel": "Salon cible",
   "suggested_by_prefix": "Suggéré par",
   "system_unavailable": "Le système QOTD est actuellement indisponible.",
   "thread_title": "Question du jour #{number}",

@@ -252,7 +252,7 @@
   "sugg_review_note": "Poznámka",
   "sugg_review_pending": "🔵 Čeká na schválení",
   "sugg_sent_success": "Děkujeme! Váš návrh byl úspěšně odeslán a čeká na schválení administrátory.",
-  "sugg_target_channel": "🎯 Cílový kanál",
+  "sugg_target_channel": "Cílový kanál",
   "suggested_by_prefix": "Navrhl",
   "system_unavailable": "QOTD systém není momentálně dostupný.",
   "thread_title": "Otázka dne #{number}",

@@ -795,11 +795,11 @@ class QotdDatabaseMixin:
             name=t(lang, "sugg_review_author", user=suggestion['user_name']),
             icon_url=suggestion.get("avatar_url") or None,
         )
+        if suggestion.get("message"):
+            embed.add_field(name=t(lang, "sugg_review_note"), value=suggestion["message"], inline=False)
         target_ch_id = suggestion.get("target_channel_id")
         if target_ch_id:
             embed.add_field(name=t(lang, "sugg_target_channel"), value=f"<#{target_ch_id}>", inline=True)
-        if suggestion.get("message"):
-            embed.add_field(name=t(lang, "sugg_review_note"), value=suggestion["message"], inline=False)
         embed.set_footer(text=t(lang, "sugg_review_pending"))
 
         try:

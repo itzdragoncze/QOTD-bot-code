@@ -252,7 +252,7 @@
   "sugg_review_note": "Note",
   "sugg_review_pending": "🔵 Pending approval",
   "sugg_sent_success": "Thank you! Your suggestion was submitted and is waiting for administrator approval.",
-  "sugg_target_channel": "🎯 Target Channel",
+  "sugg_target_channel": "Target Channel",
   "suggested_by_prefix": "Suggested by",
   "system_unavailable": "QOTD system is currently unavailable.",
   "thread_title": "Question of the day #{number}",

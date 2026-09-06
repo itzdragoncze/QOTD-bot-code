@@ -252,7 +252,7 @@
   "sugg_review_note": "Notiz",
   "sugg_review_pending": "🔵 Wartet auf Genehmigung",
   "sugg_sent_success": "Vielen Dank! Ihr Vorschlag wurde eingereicht und wartet auf die Genehmigung durch Administratoren.",
-  "sugg_target_channel": "🎯 Zielkanal",
+  "sugg_target_channel": "Zielkanal",
   "suggested_by_prefix": "Vorgeschlagen von",
   "system_unavailable": "Das QOTD-System ist derzeit nicht verfügbar.",
   "thread_title": "Frage des Tages #{number}",

@@ -130,7 +130,7 @@ def suggestion_review_view(guild_id: int, suggestion_id: str, lang: str = "en") 
     )
     b_edit = discord.ui.Button(
         label=t(lang, "btn_edit_approve"),
-        style=discord.ButtonStyle.primary,
+        style=discord.ButtonStyle.secondary,
         emoji="✏️",
         custom_id=f"qotd:review:edit:{guild_id}:{suggestion_id}",
     )
@@ -1211,7 +1211,7 @@ class SuggestionDetailView(BaseTimeoutView):
         btn_approve.callback = self.on_approve
         self.add_item(btn_approve)
 
-        btn_edit = discord.ui.Button(label=t(self.lang, "btn_edit_approve"), style=discord.ButtonStyle.primary, emoji="✏️", row=0)
+        btn_edit = discord.ui.Button(label=t(self.lang, "btn_edit_approve"), style=discord.ButtonStyle.secondary, emoji="✏️", row=0)
         btn_edit.callback = self.on_edit
         self.add_item(btn_edit)
 

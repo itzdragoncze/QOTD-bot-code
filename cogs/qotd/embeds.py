@@ -141,11 +141,11 @@ class QotdEmbedsMixin:
             name=row["user_name"],
             icon_url=row["avatar_url"] if row.get("avatar_url") else None,
         )
+        if row.get("message"):
+            embed.add_field(name=t(lang, "sugg_detail_note_label"), value=row["message"], inline=False)
         target_ch_id = row.get("target_channel_id")
         if target_ch_id:
             embed.add_field(name=t(lang, "sugg_target_channel"), value=f"<#{target_ch_id}>", inline=True)
-        if row.get("message"):
-            embed.add_field(name=t(lang, "sugg_detail_note_label"), value=row["message"], inline=False)
         embed.add_field(
             name=t(lang, "created_label"),
             value=format_discord_timestamp(row.get("created_at"), "R", lang=lang),

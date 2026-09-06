@@ -252,7 +252,7 @@
   "sugg_review_note": "Nota",
   "sugg_review_pending": "🔵 Pendiente de aprobación",
   "sugg_sent_success": "¡Gracias! Su sugerencia ha sido enviada y está esperando la aprobación de los administradores.",
-  "sugg_target_channel": "🎯 Canal de destino",
+  "sugg_target_channel": "Canal de destino",
   "suggested_by_prefix": "Sugerido por",
   "system_unavailable": "El sistema de QOTD no está disponible en este momento.",
   "thread_title": "Pregunta del día #{number}",
