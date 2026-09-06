@@ -155,7 +155,7 @@ class QotdView(discord.ui.View):
     @discord.ui.button(
         label="Suggest Question",
         style=discord.ButtonStyle.secondary,
-        emoji="💡",
+        emoji="<:bulb:1546231985305813024>",
         custom_id="qotd:suggest",
     )
     async def suggest_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
