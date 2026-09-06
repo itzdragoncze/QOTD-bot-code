@@ -360,7 +360,7 @@ class EditSuggestionModal(BaseModal):
             await interaction.response.send_message(t(user_lang, "limit_empty_question"), ephemeral=True)
             return
 
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer()
 
         if self.from_panel:
             ok, reason = await self.qotd.accept_suggestion(
@@ -372,7 +372,6 @@ class EditSuggestionModal(BaseModal):
                 interaction=None,
             )
             if ok:
-                await interaction.followup.send(t(user_lang, "sugg_approved_msg", question=new_text), ephemeral=True)
                 total_pages = await self.qotd.suggestions_page_count(self.guild_id)
                 target_page = min(self.return_page, max(0, total_pages - 1))
                 embed = await self.qotd.build_suggestions_embed(self.guild_id, target_page, lang=user_lang)
@@ -409,9 +408,7 @@ class EditSuggestionModal(BaseModal):
                 added_by=interaction.user,
                 interaction=interaction,
             )
-            if ok:
-                await interaction.followup.send(t(user_lang, "sugg_approved_msg", question=new_text), ephemeral=True)
-            else:
+            if not ok:
                 if reason == "queue_full":
                     await interaction.followup.send(t(user_lang, "sugg_cannot_approve_queue", max_q=MAX_QUEUE_QUESTIONS), ephemeral=True)
                 elif reason == "total_limit":
@@ -454,7 +451,7 @@ class RejectSuggestionModal(BaseModal):
             return
 
         reason = str(self.reason_input).strip()
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer()
 
         if self.from_panel:
             ok = await self.qotd.reject_suggestion(
@@ -492,9 +489,7 @@ class RejectSuggestionModal(BaseModal):
                 review_message=interaction.message,
                 interaction=interaction,
             )
-            if ok:
-                await interaction.followup.send(t(user_lang, "sugg_rejected_msg"), ephemeral=True)
-            else:
+            if not ok:
                 await interaction.followup.send(t(user_lang, "sugg_reject_failed"), ephemeral=True)
 
 

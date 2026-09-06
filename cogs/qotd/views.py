@@ -81,7 +81,7 @@ class SuggestionReviewButton(discord.ui.DynamicItem[discord.ui.Button], template
             return
 
         if self.action == "accept":
-            await interaction.response.defer(ephemeral=True)
+            await interaction.response.defer()
             ok, reason = await qotd_cog.accept_suggestion(
                 self.guild_id,
                 self.suggestion_id,
@@ -89,9 +89,7 @@ class SuggestionReviewButton(discord.ui.DynamicItem[discord.ui.Button], template
                 added_by=interaction.user,
                 interaction=interaction,
             )
-            if ok:
-                await interaction.followup.send(t(admin_lang, "sugg_approved_short"), ephemeral=True)
-            else:
+            if not ok:
                 if reason == "queue_full":
                     await interaction.followup.send(t(admin_lang, "sugg_cannot_approve_queue", max_q=MAX_QUEUE_QUESTIONS), ephemeral=True)
                 elif reason == "total_limit":
@@ -580,7 +578,7 @@ class QotdPanelView(BaseTimeoutView):
         await interaction.edit_original_response(embed=embed, view=view)
 
     async def on_approve_all(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer()
         cur_queue = await self.qotd.get_queue_count(self.guild_id)
         cur_total = await self.qotd.get_total_question_count(self.guild_id)
         if cur_queue >= MAX_QUEUE_QUESTIONS:
@@ -596,15 +594,11 @@ class QotdPanelView(BaseTimeoutView):
             await interaction.followup.send(t(self.lang, "no_pending_suggestions"), ephemeral=True)
             return
 
-        approved_count = 0
         for s in all_suggs:
             ok, _ = await self.qotd.accept_suggestion(self.guild_id, s["id"], added_by=interaction.user)
-            if ok:
-                approved_count += 1
-            else:
+            if not ok:
                 break
 
-        await interaction.followup.send(t(self.lang, "approved_all_msg", count=approved_count), ephemeral=True)
         await self.on_refresh(interaction)
 
     async def on_send_random(self, interaction: discord.Interaction):
@@ -1236,10 +1230,9 @@ class SuggestionDetailView(BaseTimeoutView):
         return True
 
     async def on_approve(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer()
         ok, reason = await self.qotd.accept_suggestion(self.guild_id, self.suggestion_id, added_by=interaction.user)
         if ok:
-            await interaction.followup.send(t(self.lang, "sugg_approved_msg", question=self.suggestion_row['question']), ephemeral=True)
             await self.on_back(interaction)
         else:
             if reason == "queue_full":
