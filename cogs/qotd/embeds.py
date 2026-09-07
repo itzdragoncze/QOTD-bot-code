@@ -15,6 +15,8 @@ from .constants import (
     MAX_TOTAL_QUESTIONS,
     MAX_PENDING_SUGGESTIONS,
     format_discord_timestamp,
+    get_next_qotd_datetime,
+    Icon,
 )
 
 
@@ -109,9 +111,9 @@ class QotdEmbedsMixin:
             embed.add_field(name=t(lang, "channel_label"), value=f"<#{chan_id}>", inline=True)
 
         if row.get("suggested_by_name"):
-            source_val = f"💡 {row['suggested_by_name']}"
+            source_val = f"{Icon.BULB} {row['suggested_by_name']}"
         elif row.get("added_by_name"):
-            source_val = f"👤 {row['added_by_name']}"
+            source_val = f"{Icon.ACCOUNT} {row['added_by_name']}"
         else:
             source_val = t(lang, "default_system_question")
         embed.add_field(name=t(lang, "source_author_label"), value=source_val, inline=True)
@@ -183,6 +185,10 @@ class QotdEmbedsMixin:
         server_lang_name = SUPPORTED_LANGUAGES.get(server_lang, server_lang)
         embed.add_field(name=t(effective_lang, "settings_language"), value=f"**{server_lang_name}**", inline=True)
 
+        sug_role_id = guild_settings.get("suggest_role_id")
+        sug_role_str = f"<@&{sug_role_id}>" if sug_role_id else t(effective_lang, "settings_everyone")
+        embed.add_field(name=f"{Icon.BULB} " + t(effective_lang, "settings_suggest_role"), value=sug_role_str, inline=True)
+
         if channels:
             chan_lines = []
             for idx, c in enumerate(channels, 1):
@@ -190,7 +196,8 @@ class QotdEmbedsMixin:
                 sched = c.get("scheduled_time") or DEFAULT_SCHEDULED_TIME
                 role_str = f"<@&{c['role_id']}>" if c.get("role_id") else t(effective_lang, "settings_not_used")
                 q_cnt = await self.get_queue_count(guild_id, channel_id=cid)
-                chan_lines.append(f"`{idx}.` <#{cid}> • ⏰ **{sched}** | 🔔 {role_str} | 📥 Queue: **{q_cnt}**")
+                chan_max = c.get("max_queue_limit") or MAX_QUEUE_QUESTIONS
+                chan_lines.append(f"`{idx}.` <#{cid}> • {Icon.SCHEDULE} **{sched}** | {Icon.NOTIFICATIONS} {role_str} | {Icon.SCHEDULE_PENDING} Queue: **{q_cnt}/{chan_max}**")
             embed.add_field(
                 name=t(effective_lang, "settings_active_channels"),
                 value="\n".join(chan_lines),
@@ -203,9 +210,11 @@ class QotdEmbedsMixin:
                 inline=False,
             )
 
+        total_max_queue = sum((c.get("max_queue_limit") or MAX_QUEUE_QUESTIONS) for c in channels) if channels else MAX_QUEUE_QUESTIONS
+
         embed.add_field(
             name=t(effective_lang, "settings_db_status"),
-            value=t(effective_lang, "settings_db_status_val", queue=c1, max_queue=MAX_QUEUE_QUESTIONS, history=c2, total=c1 + c2, max_total=MAX_TOTAL_QUESTIONS, sugg=c3, max_sugg=MAX_PENDING_SUGGESTIONS),
+            value=t(effective_lang, "settings_db_status_val", queue=c1, max_queue=total_max_queue, history=c2, total=c1 + c2, max_total=MAX_TOTAL_QUESTIONS, sugg=c3, max_sugg=MAX_PENDING_SUGGESTIONS),
             inline=False,
         )
         embed.set_footer(text=t(effective_lang, "settings_footer"))
@@ -225,21 +234,24 @@ class QotdEmbedsMixin:
             embed.description = "⚠️ Channel configuration not found."
             return embed
 
-        embed.add_field(name="📢 " + t(effective_lang, "channel_label"), value=f"<#{channel_id}>", inline=True)
+        embed.add_field(name=f"{Icon.CAMPAIGN} " + t(effective_lang, "channel_label"), value=f"<#{channel_id}>", inline=True)
         sched = c.get("scheduled_time") or DEFAULT_SCHEDULED_TIME
-        embed.add_field(name="⏰ " + t(effective_lang, "btn_manage_channel_hour"), value=f"**{sched}** (Europe/Prague)", inline=True)
+        embed.add_field(name=f"{Icon.SCHEDULE} " + t(effective_lang, "btn_manage_channel_hour"), value=f"**{sched}** (Europe/Prague)", inline=True)
         role_str = f"<@&{c['role_id']}>" if c.get("role_id") else t(effective_lang, "settings_not_used")
-        embed.add_field(name="🔔 " + t(effective_lang, "btn_manage_channel_role"), value=role_str, inline=True)
+        embed.add_field(name=f"{Icon.NOTIFICATIONS} " + t(effective_lang, "btn_manage_channel_role"), value=role_str, inline=True)
 
         thresh = c.get("low_queue_threshold") or 3
-        embed.add_field(name="⚠️ " + t(effective_lang, "btn_manage_channel_threshold"), value=f"**{thresh}** questions", inline=True)
+        embed.add_field(name=f"{Icon.SCHEDULE_PENDING} " + t(effective_lang, "btn_manage_channel_threshold"), value=f"**{thresh}** questions", inline=True)
+
+        max_q = c.get("max_queue_limit") or 500
+        embed.add_field(name=f"{Icon.HARD_DRIVE} " + t(effective_lang, "btn_manage_channel_max_queue"), value=f"**{max_q}** questions", inline=True)
 
         q_count = await self.get_queue_count(guild_id, channel_id=channel_id)
         h_count = await self.get_total_question_count(guild_id, channel_id=channel_id) - q_count
-        embed.add_field(name="📊 Queue / History", value=f"Queue: **{q_count}** | History: **{h_count}**", inline=True)
+        embed.add_field(name=f"{Icon.HARD_DRIVE} Queue / History", value=f"Queue: **{q_count}** | History: **{h_count}**", inline=True)
 
         last_date = c.get("last_posted_date") or "None"
-        embed.add_field(name="📅 Last Posted Date", value=f"`{last_date}`", inline=True)
+        embed.add_field(name=f"{Icon.CALENDAR_MONTH} Last Posted Date", value=f"`{last_date}`", inline=True)
         return embed
 
     async def build_top_embed(self, guild_id: int, lang: Optional[str] = None) -> discord.Embed:
@@ -255,21 +267,19 @@ class QotdEmbedsMixin:
             """,
             (guild_id,),
         )
-        rows = await cursor.fetchall()
+        top_users = await cursor.fetchall()
+
         embed = discord.Embed(title=t(lang, "top_title"), colour=COLOR_LEADERBOARD)
-        if not rows:
+        if not top_users:
             embed.description = t(lang, "top_empty")
-            embed.set_footer(text=t(lang, "page_single"))
-            return embed
+        else:
+            lines = []
+            medals = ["🥇", "🥈", "🥉"]
+            for idx, row in enumerate(top_users):
+                badge = medals[idx] if idx < len(medals) else f"`{idx + 1}.`"
+                lines.append(t(lang, "top_entry", rank=badge, user_id=row["suggested_by_id"], name=row["suggested_by_name"], count=row["accepted_count"]))
+            embed.add_field(name=t(lang, "top_header"), value="\n".join(lines), inline=False)
 
-        medals = ["🥇", "🥈", "🥉"]
-        lines = []
-        for rank, r in enumerate(rows, 1):
-            badge = medals[rank - 1] if rank <= 3 else f"`{rank}.`"
-            approved_label = t(lang, "approved_questions_count")
-            lines.append(f"{badge} **{r['suggested_by_name']}** — {r['accepted_count']} {approved_label}")
-
-        embed.description = "\n".join(lines)
         embed.set_footer(text=t(lang, "top_footer"))
         return embed
 
@@ -281,9 +291,15 @@ class QotdEmbedsMixin:
         if len(channels) == 1:
             sched_time = channels[0].get("scheduled_time") or DEFAULT_SCHEDULED_TIME
 
+        desc = t(effective_lang, "info_desc", time=sched_time)
+        if len(channels) == 1:
+            next_dt = get_next_qotd_datetime(channels[0])
+            ts = int(next_dt.timestamp())
+            desc += f"\n\n{Icon.SCHEDULE} **" + t(effective_lang, "info_next_post") + f"**: <t:{ts}:t> (<t:{ts}:R>)"
+
         embed = discord.Embed(
             title=t(effective_lang, "info_title"),
-            description=t(effective_lang, "info_desc", time=sched_time),
+            description=desc,
             colour=COLOR_DETAIL,
         )
         embed.add_field(
@@ -310,9 +326,11 @@ class QotdEmbedsMixin:
                 ch_obj = self.bot.get_channel(c["channel_id"]) or (guild.get_channel(c["channel_id"]) if guild else None)
                 ch_name = f"<#{c['channel_id']}>" if ch_obj else f"Channel {c['channel_id']}"
                 sched = c.get("scheduled_time") or DEFAULT_SCHEDULED_TIME
-                ch_lines.append(f"• {ch_name} — **{sched}**")
+                next_dt = get_next_qotd_datetime(c)
+                ts = int(next_dt.timestamp())
+                ch_lines.append(f"• {ch_name} — **{sched}** • <t:{ts}:t> (<t:{ts}:R>)")
             embed.add_field(
-                name="📅 " + t(effective_lang, "available_qotd_channels_label"),
+                name=f"{Icon.CALENDAR_MONTH} " + t(effective_lang, "available_qotd_channels_label"),
                 value="\n".join(ch_lines),
                 inline=False,
             )

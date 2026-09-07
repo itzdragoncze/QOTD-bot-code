@@ -1,11 +1,20 @@
-# QOTD Discord Bot
+# DailyDrop - QOTD Discord Bot
 
 An automated Question of the Day (QOTD) Discord bot built with **Python 3.14**, **discord.py 2.x**, and asynchronous **SQLite** (`aiosqlite`).
 
-## 📚 Documentation
+## 📚 Documentation & Legal
 
-For the complete breakdown of features, safety limits, commands, permissions, and database architecture, please see:
-👉 **[Full Feature List & Limits Documentation (FEATURES.md)](FEATURES.md)**
+For complete breakdown of features, policies, and architecture:
+- 👉 **[Full Feature List & Limits Documentation (FEATURES.md)](FEATURES.md)**
+- 📜 **[Terms of Service (TERMS_OF_SERVICE.md)](TERMS_OF_SERVICE.md)**
+- 🔒 **[Privacy Policy (PRIVACY_POLICY.md)](PRIVACY_POLICY.md)**
+
+---
+
+## 💬 Support & Community
+
+- **Discord Support Server**: [https://discord.gg/z5M7umJMza](https://discord.gg/z5M7umJMza)
+- **Contact Email**: [itzdragoncze@gmail.com](mailto:itzdragoncze@gmail.com)
 
 ---
 

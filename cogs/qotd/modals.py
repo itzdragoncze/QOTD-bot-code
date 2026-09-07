@@ -14,6 +14,7 @@ from .constants import (
     parse_question_input,
     normalize_question,
     is_admin,
+    Icon,
 )
 
 if TYPE_CHECKING:
@@ -25,7 +26,7 @@ class BaseModal(discord.ui.Modal):
 
     async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
         logger.exception("Error in modal %s: %s", self.__class__.__name__, error)
-        msg = "❌ An unexpected error occurred while processing your input."
+        msg = f"{Icon.CANCEL} An unexpected error occurred while processing your input."
         try:
             if not interaction.response.is_done():
                 await interaction.response.send_message(msg, ephemeral=True)
@@ -198,9 +199,15 @@ class AddQuestionModal(BaseModal):
             return
 
         cur_queue = await self.qotd.get_queue_count(self.guild_id, self.channel_id)
-        if cur_queue >= MAX_QUEUE_QUESTIONS:
+        channel_max_limit = MAX_QUEUE_QUESTIONS
+        if self.channel_id:
+            ch_row = await self.qotd.get_qotd_channel(self.channel_id)
+            if ch_row and ch_row.get("max_queue_limit") is not None:
+                channel_max_limit = ch_row["max_queue_limit"]
+
+        if cur_queue >= channel_max_limit:
             await interaction.followup.send(
-                t(user_lang, "limit_queue_full", max_q=MAX_QUEUE_QUESTIONS),
+                t(user_lang, "limit_queue_full", max_q=channel_max_limit),
                 ephemeral=True,
             )
             return
@@ -221,7 +228,13 @@ class AddQuestionModal(BaseModal):
             await interaction.followup.send("\n".join(lines), ephemeral=True)
             return
 
-        remaining_slots = min(MAX_QUEUE_QUESTIONS - cur_queue, MAX_TOTAL_QUESTIONS - cur_total)
+        remaining_slots = max(0, min(channel_max_limit - cur_queue, MAX_TOTAL_QUESTIONS - cur_total))
+        if remaining_slots <= 0:
+            await interaction.followup.send(
+                t(user_lang, "limit_queue_full", max_q=channel_max_limit),
+                ephemeral=True,
+            )
+            return
         to_add = unique[:remaining_slots]
         skipped_capacity = len(unique) - len(to_add)
 
@@ -248,7 +261,7 @@ class AddQuestionModal(BaseModal):
             if dup_cnt > 3:
                 lines.append(t(user_lang, "and_more_duplicates", count=dup_cnt - 3))
         if skipped_capacity > 0:
-            lines.append(t(user_lang, "skipped_capacity", count=skipped_capacity, max_q=MAX_QUEUE_QUESTIONS, max_total=MAX_TOTAL_QUESTIONS))
+            lines.append(t(user_lang, "skipped_capacity", count=skipped_capacity, max_q=channel_max_limit, max_total=MAX_TOTAL_QUESTIONS))
 
         msg_text = "\n".join(lines) if lines else t(user_lang, "no_new_questions_added")
         await interaction.followup.send(msg_text, ephemeral=True)
@@ -329,6 +342,8 @@ class EditSuggestionModal(BaseModal):
         guild_id: int,
         suggestion_id: str,
         current_text: str,
+        channels: Optional[List[Dict[str, Any]]] = None,
+        target_channel_id: Optional[int] = None,
         return_page: int = 0,
         from_panel: bool = False,
         lang: Optional[str] = None,
@@ -336,18 +351,61 @@ class EditSuggestionModal(BaseModal):
         self.qotd = qotd
         self.guild_id = guild_id
         self.suggestion_id = suggestion_id
+        self.channels = channels or []
+        self.target_channel_id = target_channel_id
         self.return_page = return_page
         self.from_panel = from_panel
         self.lang = lang or qotd.get_user_language(None, guild_id)
-        super().__init__(title=t(self.lang, "modal_edit_sugg_title"))
+        super().__init__(title=t(self.lang, "modal_edit_sugg_title")[:45])
 
         self.question_input = discord.ui.TextInput(
-            label=t(self.lang, "modal_edit_sugg_label"),
+            label=t(self.lang, "modal_edit_sugg_label")[:45],
             default=current_text,
             max_length=300,
             style=discord.TextStyle.paragraph,
         )
         self.add_item(self.question_input)
+
+        self.channel_select: Optional[discord.ui.Select] = None
+        self.channel_label: Optional[discord.ui.Label] = None
+        if self.channels:
+            options = []
+            guild = qotd.bot.get_guild(guild_id) if hasattr(qotd, "bot") else None
+            default_chosen = False
+            for idx, ch in enumerate(self.channels[:25]):
+                ch_id = ch["channel_id"]
+                discord_ch = (qotd.bot.get_channel(ch_id) or (guild.get_channel(ch_id) if guild else None)) if hasattr(qotd, "bot") else None
+                raw_name = discord_ch.name if discord_ch else str(ch_id)
+                ch_name = f"#{raw_name}" if not raw_name.startswith("#") else raw_name
+                is_default = False
+                if target_channel_id is not None and ch_id == target_channel_id:
+                    is_default = True
+                    default_chosen = True
+                elif target_channel_id is None and idx == 0:
+                    is_default = True
+                    default_chosen = True
+                options.append(
+                    discord.SelectOption(
+                        label=ch_name[:100],
+                        value=str(ch_id),
+                        default=is_default,
+                    )
+                )
+
+            if not default_chosen and options:
+                options[0].default = True
+
+            self.channel_select = discord.ui.Select(
+                placeholder=t(self.lang, "select_channel_suggest_placeholder")[:100],
+                options=options,
+                min_values=1,
+                max_values=1,
+            )
+            self.channel_label = discord.ui.Label(
+                text=t(self.lang, "channel_label")[:45],
+                component=self.channel_select,
+            )
+            self.add_item(self.channel_label)
 
     async def on_submit(self, interaction: discord.Interaction):
         user_lang = self.qotd.get_user_language(interaction, self.guild_id)
@@ -360,6 +418,17 @@ class EditSuggestionModal(BaseModal):
             await interaction.response.send_message(t(user_lang, "limit_empty_question"), ephemeral=True)
             return
 
+        selected_ch_id = None
+        if self.channel_select and self.channel_select.values:
+            try:
+                selected_ch_id = int(self.channel_select.values[0])
+            except (ValueError, TypeError):
+                selected_ch_id = None
+        if not selected_ch_id:
+            selected_ch_id = self.target_channel_id
+        if not selected_ch_id and self.channels:
+            selected_ch_id = self.channels[0]["channel_id"]
+
         await interaction.response.defer()
 
         if self.from_panel:
@@ -370,6 +439,7 @@ class EditSuggestionModal(BaseModal):
                 review_message=None,
                 added_by=interaction.user,
                 interaction=None,
+                target_channel_id=selected_ch_id,
             )
             if ok:
                 total_pages = await self.qotd.suggestions_page_count(self.guild_id)
@@ -394,7 +464,12 @@ class EditSuggestionModal(BaseModal):
                     logger.debug("Failed to edit suggestion detail response: %s", err)
             else:
                 if reason == "queue_full":
-                    await interaction.followup.send(t(user_lang, "sugg_cannot_approve_queue", max_q=MAX_QUEUE_QUESTIONS), ephemeral=True)
+                    ch_limit = MAX_QUEUE_QUESTIONS
+                    if selected_ch_id:
+                        ch_row = await self.qotd.get_qotd_channel(selected_ch_id)
+                        if ch_row and ch_row.get("max_queue_limit") is not None:
+                            ch_limit = ch_row["max_queue_limit"]
+                    await interaction.followup.send(t(user_lang, "sugg_cannot_approve_queue", max_q=ch_limit), ephemeral=True)
                 elif reason == "total_limit":
                     await interaction.followup.send(t(user_lang, "sugg_cannot_approve_total", max_total=MAX_TOTAL_QUESTIONS), ephemeral=True)
                 else:
@@ -407,10 +482,16 @@ class EditSuggestionModal(BaseModal):
                 review_message=interaction.message,
                 added_by=interaction.user,
                 interaction=interaction,
+                target_channel_id=selected_ch_id,
             )
             if not ok:
                 if reason == "queue_full":
-                    await interaction.followup.send(t(user_lang, "sugg_cannot_approve_queue", max_q=MAX_QUEUE_QUESTIONS), ephemeral=True)
+                    ch_limit = MAX_QUEUE_QUESTIONS
+                    if selected_ch_id:
+                        ch_row = await self.qotd.get_qotd_channel(selected_ch_id)
+                        if ch_row and ch_row.get("max_queue_limit") is not None:
+                            ch_limit = ch_row["max_queue_limit"]
+                    await interaction.followup.send(t(user_lang, "sugg_cannot_approve_queue", max_q=ch_limit), ephemeral=True)
                 elif reason == "total_limit":
                     await interaction.followup.send(t(user_lang, "sugg_cannot_approve_total", max_total=MAX_TOTAL_QUESTIONS), ephemeral=True)
                 else:
@@ -525,7 +606,7 @@ class SearchQuestionsModal(BaseModal):
             colour=COLOR_DETAIL,
         )
         for idx, row in enumerate(results[:10], 1):
-            source_icon = "💡" if row["source"] == "suggestion" else ("👤" if row["source"] == "manual" else "🤖")
+            source_icon = Icon.BULB if row["source"] == "suggestion" else (Icon.ACCOUNT if row["source"] == "manual" else Icon.SMART_TOY)
             status_text = t(user_lang, "status_queue") if row["status"] == "to_ask" else t(user_lang, "status_asked")
             embed.add_field(
                 name=f"{idx}. [#{row['id']}] {status_text} • {source_icon}",
@@ -610,10 +691,40 @@ class QotdThresholdModal(BaseModal):
         await self.qotd.update_qotd_channel(self.channel_id, low_queue_threshold=val)
         embed = await self.qotd.build_channel_manage_embed(self.guild_id, self.channel_id, lang=user_lang)
         from .views import ChannelManageView
-        from .views import ChannelManageView
         view = ChannelManageView(self.qotd, self.guild_id, self.channel_id, lang=user_lang)
         await interaction.response.edit_message(embed=embed, view=view)
         await interaction.followup.send(t(user_lang, "threshold_updated", threshold=val), ephemeral=True)
+
+
+class QotdMaxQueueModal(BaseModal):
+    def __init__(self, qotd: "Qotd", guild_id: int, channel_id: int, current_max: int = 500, lang: Optional[str] = None):
+        self.qotd = qotd
+        self.guild_id = guild_id
+        self.channel_id = channel_id
+        self.lang = lang or qotd.get_user_language(None, guild_id)
+        super().__init__(title=t(self.lang, "modal_max_queue_title")[:45])
+
+        self.max_input = discord.ui.TextInput(
+            label=t(self.lang, "modal_max_queue_label")[:45],
+            default=str(current_max),
+            max_length=4,
+        )
+        self.add_item(self.max_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        user_lang = self.qotd.get_user_language(interaction, self.guild_id)
+        raw = str(self.max_input).strip()
+        if not raw.isdigit() or not (5 <= int(raw) <= 1000):
+            await interaction.response.send_message("⚠️ Please enter a number between 5 and 1000.", ephemeral=True)
+            return
+
+        val = int(raw)
+        await self.qotd.update_qotd_channel(self.channel_id, max_queue_limit=val)
+        embed = await self.qotd.build_channel_manage_embed(self.guild_id, self.channel_id, lang=user_lang)
+        from .views import ChannelManageView
+        view = ChannelManageView(self.qotd, self.guild_id, self.channel_id, lang=user_lang)
+        await interaction.response.edit_message(embed=embed, view=view)
+        await interaction.followup.send(t(user_lang, "max_queue_updated", max_queue=val), ephemeral=True)
 
 
 # ---------------------------------------------------------------------------

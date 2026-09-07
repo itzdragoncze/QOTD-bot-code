@@ -18,6 +18,7 @@ from .constants import (
     MAX_BATCH_ADD_QUESTIONS,
     parse_question_input,
     is_admin,
+    Icon,
 )
 from .modals import SuggestionModal
 from .views import (
@@ -190,11 +191,11 @@ class Qotd(commands.Cog, QotdDatabaseMixin, QotdEmbedsMixin, QotdSchedulerMixin)
     )
     @app_commands.choices(
         section=[
-            app_commands.Choice(name="📌 Questions in Queue / Fronta", value="to_ask"),
-            app_commands.Choice(name="💡 Suggestions / Návrhy", value="suggestions"),
-            app_commands.Choice(name="📜 Question History / Historie", value="asked"),
-            app_commands.Choice(name="⚙️ Settings & Stats / Nastavení", value="settings"),
-            app_commands.Choice(name="🏆 Leaderboard / Žebříček", value="top"),
+            app_commands.Choice(name=f"{Icon.FORUM} Questions in Queue / Fronta", value="to_ask"),
+            app_commands.Choice(name=f"{Icon.BULB} Suggestions / Návrhy", value="suggestions"),
+            app_commands.Choice(name=f"{Icon.CALENDAR} Question History / Historie", value="asked"),
+            app_commands.Choice(name=f"{Icon.SETTINGS} Settings & Stats / Nastavení", value="settings"),
+            app_commands.Choice(name=f"{Icon.TROPHY} Leaderboard / Žebříček", value="top"),
         ]
     )
     async def qotd(
@@ -250,10 +251,16 @@ class Qotd(commands.Cog, QotdDatabaseMixin, QotdEmbedsMixin, QotdSchedulerMixin)
             else:
                 target_ch_id = channels[0]["channel_id"]
 
+        channel_max_limit = MAX_QUEUE_QUESTIONS
+        if target_ch_id:
+            ch_row = await self.get_qotd_channel(target_ch_id)
+            if ch_row and ch_row.get("max_queue_limit") is not None:
+                channel_max_limit = ch_row["max_queue_limit"]
+
         queue_count = await self.get_queue_count(interaction.guild_id, channel_id=target_ch_id)
-        if queue_count >= MAX_QUEUE_QUESTIONS:
+        if queue_count >= channel_max_limit:
             await interaction.followup.send(
-                t(user_lang, "limit_queue_full", max_q=MAX_QUEUE_QUESTIONS),
+                t(user_lang, "limit_queue_full", max_q=channel_max_limit),
                 ephemeral=True,
             )
             return
@@ -308,6 +315,20 @@ class Qotd(commands.Cog, QotdDatabaseMixin, QotdEmbedsMixin, QotdSchedulerMixin)
         if not channels:
             await interaction.response.send_message(t(user_lang, "no_channels_configured"), ephemeral=True)
             return
+
+        settings = await self.get_guild_settings(interaction.guild_id)
+        suggest_role_id = settings.get("suggest_role_id")
+        if suggest_role_id:
+            is_allowed = False
+            member = interaction.user if isinstance(interaction.user, discord.Member) else None
+            if member:
+                if getattr(member.guild_permissions, "administrator", False) or getattr(member.guild_permissions, "manage_guild", False):
+                    is_allowed = True
+                elif any(r.id == suggest_role_id for r in member.roles):
+                    is_allowed = True
+            if not is_allowed:
+                await interaction.response.send_message(t(user_lang, "sugg_role_required", role_id=suggest_role_id), ephemeral=True)
+                return
 
         target_ch_id: Optional[int] = None
         if interaction.channel_id in [c["channel_id"] for c in channels]:

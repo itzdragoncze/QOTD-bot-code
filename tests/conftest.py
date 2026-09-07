@@ -24,7 +24,8 @@ async def in_memory_db() -> AsyncGenerator[aiosqlite.Connection, None]:
         CREATE TABLE settings (
             guild_id INTEGER PRIMARY KEY,
             admin_channel_id INTEGER,
-            language TEXT NOT NULL DEFAULT 'en'
+            language TEXT NOT NULL DEFAULT 'en',
+            suggest_role_id INTEGER DEFAULT NULL
         );
         """
     )
@@ -39,6 +40,7 @@ async def in_memory_db() -> AsyncGenerator[aiosqlite.Connection, None]:
             role_id INTEGER DEFAULT NULL,
             scheduled_time TEXT NOT NULL DEFAULT '09:00',
             low_queue_threshold INTEGER NOT NULL DEFAULT 3,
+            max_queue_limit INTEGER NOT NULL DEFAULT 500,
             last_posted_date TEXT DEFAULT NULL,
             last_thread_id INTEGER DEFAULT NULL,
             qotd_number INTEGER NOT NULL DEFAULT 0,

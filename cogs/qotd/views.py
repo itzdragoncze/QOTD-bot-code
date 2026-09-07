@@ -1,3 +1,4 @@
+import inspect
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
@@ -21,6 +22,7 @@ from .constants import (
     MAX_TOTAL_QUESTIONS,
     format_discord_timestamp,
     is_admin,
+    Icon,
 )
 from .modals import (
     SuggestionModal,
@@ -91,7 +93,14 @@ class SuggestionReviewButton(discord.ui.DynamicItem[discord.ui.Button], template
             )
             if not ok:
                 if reason == "queue_full":
-                    await interaction.followup.send(t(admin_lang, "sugg_cannot_approve_queue", max_q=MAX_QUEUE_QUESTIONS), ephemeral=True)
+                    ch_limit = MAX_QUEUE_QUESTIONS
+                    cursor = await qotd_cog.db.execute("SELECT target_channel_id FROM suggestions WHERE id = ?", (self.suggestion_id,))
+                    s_row = await cursor.fetchone()
+                    if s_row and s_row[0]:
+                        ch_row = await qotd_cog.get_qotd_channel(s_row[0])
+                        if ch_row and ch_row.get("max_queue_limit") is not None:
+                            ch_limit = ch_row["max_queue_limit"]
+                    await interaction.followup.send(t(admin_lang, "sugg_cannot_approve_queue", max_q=ch_limit), ephemeral=True)
                 elif reason == "total_limit":
                     await interaction.followup.send(t(admin_lang, "sugg_cannot_approve_total", max_total=MAX_TOTAL_QUESTIONS), ephemeral=True)
                 else:
@@ -103,14 +112,23 @@ class SuggestionReviewButton(discord.ui.DynamicItem[discord.ui.Button], template
 
         elif self.action == "edit":
             cursor = await qotd_cog.db.execute(
-                "SELECT question FROM suggestions WHERE id = ? AND guild_id = ?",
+                "SELECT question, target_channel_id FROM suggestions WHERE id = ? AND guild_id = ?",
                 (self.suggestion_id, self.guild_id),
             )
             row = await cursor.fetchone()
             if not row:
                 await interaction.response.send_message(t(admin_lang, "not_found"), ephemeral=True)
                 return
-            modal = EditSuggestionModal(qotd_cog, self.guild_id, self.suggestion_id, row[0], lang=admin_lang)
+            channels = await qotd_cog.get_qotd_channels(self.guild_id)
+            modal = EditSuggestionModal(
+                qotd_cog,
+                self.guild_id,
+                self.suggestion_id,
+                row["question"],
+                channels=channels,
+                target_channel_id=row["target_channel_id"],
+                lang=admin_lang,
+            )
             await interaction.response.send_modal(modal)
 
 
@@ -119,19 +137,19 @@ def suggestion_review_view(guild_id: int, suggestion_id: str, lang: str = "en") 
     b_acc = discord.ui.Button(
         label=t(lang, "btn_approve"),
         style=discord.ButtonStyle.success,
-        emoji="✅",
+        emoji=Icon.CHECK,
         custom_id=f"qotd:review:accept:{guild_id}:{suggestion_id}",
     )
     b_dec = discord.ui.Button(
         label=t(lang, "btn_decline"),
         style=discord.ButtonStyle.danger,
-        emoji="❌",
+        emoji=Icon.CANCEL,
         custom_id=f"qotd:review:decline:{guild_id}:{suggestion_id}",
     )
     b_edit = discord.ui.Button(
         label=t(lang, "btn_edit_approve"),
         style=discord.ButtonStyle.secondary,
-        emoji="✏️",
+        emoji=Icon.EDIT,
         custom_id=f"qotd:review:edit:{guild_id}:{suggestion_id}",
     )
     v.add_item(b_acc)
@@ -155,7 +173,7 @@ class QotdView(discord.ui.View):
     @discord.ui.button(
         label="Suggest Question",
         style=discord.ButtonStyle.secondary,
-        emoji="<:bulb:1546231985305813024>",
+        emoji=Icon.BULB,
         custom_id="qotd:suggest",
     )
     async def suggest_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -168,6 +186,20 @@ class QotdView(discord.ui.View):
         if not channels:
             await interaction.response.send_message(t(user_lang, "no_channels_configured"), ephemeral=True)
             return
+
+        settings = await self.qotd.get_guild_settings(interaction.guild_id)
+        suggest_role_id = settings.get("suggest_role_id")
+        if suggest_role_id:
+            is_allowed = False
+            member = interaction.user if isinstance(interaction.user, discord.Member) else None
+            if member:
+                if getattr(member.guild_permissions, "administrator", False) or getattr(member.guild_permissions, "manage_guild", False):
+                    is_allowed = True
+                elif any(r.id == suggest_role_id for r in member.roles):
+                    is_allowed = True
+            if not is_allowed:
+                await interaction.response.send_message(t(user_lang, "sugg_role_required", role_id=suggest_role_id), ephemeral=True)
+                return
 
         active_ch = interaction.channel_id if interaction.channel_id in [c["channel_id"] for c in channels] else None
         modal = SuggestionModal(
@@ -182,7 +214,7 @@ class QotdView(discord.ui.View):
     @discord.ui.button(
         label="Info",
         style=discord.ButtonStyle.secondary,
-        emoji="ℹ️",
+        emoji=Icon.INFO,
         custom_id="qotd:info",
     )
     async def info_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -261,37 +293,37 @@ class QotdMenuSelect(discord.ui.Select):
             discord.SelectOption(
                 label=t(lang, "sec_to_ask"),
                 value="to_ask",
-                emoji="📌",
+                emoji=Icon.FORUM,
                 default=(selected == "to_ask"),
             ),
             discord.SelectOption(
                 label=t(lang, "sec_suggestions"),
                 value="suggestions",
-                emoji="💡",
+                emoji=Icon.BULB,
                 default=(selected == "suggestions"),
             ),
             discord.SelectOption(
                 label=t(lang, "sec_asked"),
                 value="asked",
-                emoji="📜",
+                emoji=Icon.CALENDAR,
                 default=(selected == "asked"),
             ),
             discord.SelectOption(
                 label=t(lang, "sec_settings"),
                 value="settings",
-                emoji="⚙️",
+                emoji=Icon.SETTINGS,
                 default=(selected == "settings"),
             ),
             discord.SelectOption(
                 label=t(lang, "sec_top"),
                 value="top",
-                emoji="🏆",
+                emoji=Icon.TROPHY,
                 default=(selected == "top"),
             ),
             discord.SelectOption(
                 label=t(lang, "sec_info"),
                 value="info",
-                emoji="ℹ️",
+                emoji=Icon.INFO,
                 default=(selected == "info"),
             ),
         ]
@@ -411,79 +443,83 @@ class QotdPanelView(BaseTimeoutView):
 
         # Row 3: Action Buttons
         if section == "to_ask":
-            btn_add = discord.ui.Button(label=t(self.lang, "btn_add_questions"), style=discord.ButtonStyle.success, emoji="➕", row=3)
+            btn_add = discord.ui.Button(label=t(self.lang, "btn_add_questions"), style=discord.ButtonStyle.success, emoji=Icon.ADD_NOTES, row=3)
             btn_add.callback = self.on_add_questions
             self.add_item(btn_add)
 
-            btn_search = discord.ui.Button(label=t(self.lang, "btn_search"), style=discord.ButtonStyle.secondary, emoji="🔍", row=3)
+            btn_search = discord.ui.Button(label=t(self.lang, "btn_search"), style=discord.ButtonStyle.secondary, emoji=Icon.SEARCH, row=3)
             btn_search.callback = self.on_search
             self.add_item(btn_search)
 
             if self.page_items:
-                btn_remove = discord.ui.Button(label=t(self.lang, "btn_bulk_delete"), style=discord.ButtonStyle.danger, emoji="🗑️", row=3)
+                btn_remove = discord.ui.Button(label=t(self.lang, "btn_bulk_delete"), style=discord.ButtonStyle.danger, emoji=Icon.TRASH, row=3)
                 btn_remove.callback = self.on_bulk_delete
                 self.add_item(btn_remove)
 
-                btn_send = discord.ui.Button(label=t(self.lang, "btn_send_random"), style=discord.ButtonStyle.primary, emoji="🎲", row=3)
+                btn_send = discord.ui.Button(label=t(self.lang, "btn_send_random"), style=discord.ButtonStyle.primary, emoji=Icon.SHUFFLE, row=3)
                 btn_send.callback = self.on_send_random
                 self.add_item(btn_send)
 
         elif section == "asked":
-            btn_search = discord.ui.Button(label=t(self.lang, "btn_search"), style=discord.ButtonStyle.secondary, emoji="🔍", row=3)
+            btn_search = discord.ui.Button(label=t(self.lang, "btn_search"), style=discord.ButtonStyle.secondary, emoji=Icon.SEARCH, row=3)
             btn_search.callback = self.on_search
             self.add_item(btn_search)
 
             if self.page_items:
-                btn_remove = discord.ui.Button(label=t(self.lang, "btn_bulk_delete"), style=discord.ButtonStyle.danger, emoji="🗑️", row=3)
+                btn_remove = discord.ui.Button(label=t(self.lang, "btn_bulk_delete"), style=discord.ButtonStyle.danger, emoji=Icon.TRASH, row=3)
                 btn_remove.callback = self.on_bulk_delete
                 self.add_item(btn_remove)
 
-                btn_clear = discord.ui.Button(label=t(self.lang, "btn_clear_category"), style=discord.ButtonStyle.secondary, emoji="⚠️", row=3)
+                btn_clear = discord.ui.Button(label=t(self.lang, "btn_clear_category"), style=discord.ButtonStyle.secondary, emoji=Icon.DELETE_FOREVER, row=3)
                 btn_clear.callback = self.on_clear_category
                 self.add_item(btn_clear)
 
         elif section == "suggestions" and self.page_items:
-            btn_approve_all = discord.ui.Button(label=t(self.lang, "btn_approve_all"), style=discord.ButtonStyle.success, emoji="✅", row=2)
+            btn_approve_all = discord.ui.Button(label=t(self.lang, "btn_approve_all"), style=discord.ButtonStyle.success, emoji=Icon.CHECK, row=2)
             btn_approve_all.callback = self.on_approve_all
             self.add_item(btn_approve_all)
 
-            btn_clear_sugg = discord.ui.Button(label=t(self.lang, "btn_clear_category"), style=discord.ButtonStyle.danger, emoji="🗑️", row=2)
+            btn_clear_sugg = discord.ui.Button(label=t(self.lang, "btn_clear_category"), style=discord.ButtonStyle.danger, emoji=Icon.TRASH, row=2)
             btn_clear_sugg.callback = self.on_clear_category
             self.add_item(btn_clear_sugg)
 
         elif section == "settings":
-            btn_add_chan = discord.ui.Button(label=t(self.lang, "btn_add_qotd_channel"), style=discord.ButtonStyle.success, emoji="➕", row=2)
+            btn_add_chan = discord.ui.Button(label=t(self.lang, "btn_add_qotd_channel"), style=discord.ButtonStyle.success, emoji=Icon.ADD_BOX, row=2)
             btn_add_chan.callback = self.on_add_channel_click
             self.add_item(btn_add_chan)
 
-            btn_admin_chan = discord.ui.Button(label=t(self.lang, "settings_admin_channel"), style=discord.ButtonStyle.secondary, emoji="🛡️", row=2)
+            btn_admin_chan = discord.ui.Button(label=t(self.lang, "settings_admin_channel"), style=discord.ButtonStyle.secondary, emoji=Icon.SECURITY, row=2)
             btn_admin_chan.callback = self.on_admin_channel_click
             self.add_item(btn_admin_chan)
 
-            btn_lang = discord.ui.Button(label=t(self.lang, "btn_change_language"), style=discord.ButtonStyle.secondary, emoji="🌐", row=2)
+            btn_lang = discord.ui.Button(label=t(self.lang, "btn_change_language"), style=discord.ButtonStyle.secondary, emoji=Icon.LANGUAGE, row=2)
             btn_lang.callback = self.on_change_language
             self.add_item(btn_lang)
+
+            btn_suggest_role = discord.ui.Button(label=t(self.lang, "settings_suggest_role"), style=discord.ButtonStyle.secondary, emoji=Icon.BULB, row=2)
+            btn_suggest_role.callback = self.on_suggest_role_click
+            self.add_item(btn_suggest_role)
 
         # Row 4: Pagination & Refresh Controls
         btn_row = 4 if section in ("to_ask", "asked") else 3
         if section in ("to_ask", "asked", "suggestions") and self.total_pages > 1:
-            btn_first = discord.ui.Button(emoji="⏮️", style=discord.ButtonStyle.secondary, disabled=(self.page == 0), row=btn_row)
+            btn_first = discord.ui.Button(emoji=Icon.FIRST_PAGE, style=discord.ButtonStyle.secondary, disabled=(self.page == 0), row=btn_row)
             btn_first.callback = self.on_page_first
             self.add_item(btn_first)
 
-            btn_prev = discord.ui.Button(emoji="◀️", style=discord.ButtonStyle.primary, disabled=(self.page == 0), row=btn_row)
+            btn_prev = discord.ui.Button(emoji=Icon.ARROW_LEFT, style=discord.ButtonStyle.primary, disabled=(self.page == 0), row=btn_row)
             btn_prev.callback = self.on_page_prev
             self.add_item(btn_prev)
 
-            btn_next = discord.ui.Button(emoji="▶️", style=discord.ButtonStyle.primary, disabled=(self.page >= self.total_pages - 1), row=btn_row)
+            btn_next = discord.ui.Button(emoji=Icon.ARROW_RIGHT, style=discord.ButtonStyle.primary, disabled=(self.page >= self.total_pages - 1), row=btn_row)
             btn_next.callback = self.on_page_next
             self.add_item(btn_next)
 
-            btn_last = discord.ui.Button(emoji="⏭️", style=discord.ButtonStyle.secondary, disabled=(self.page >= self.total_pages - 1), row=btn_row)
+            btn_last = discord.ui.Button(emoji=Icon.LAST_PAGE, style=discord.ButtonStyle.secondary, disabled=(self.page >= self.total_pages - 1), row=btn_row)
             btn_last.callback = self.on_page_last
             self.add_item(btn_last)
 
-        btn_refresh = discord.ui.Button(label=t(self.lang, "btn_refresh"), style=discord.ButtonStyle.secondary, emoji="🔄", row=btn_row)
+        btn_refresh = discord.ui.Button(label=t(self.lang, "btn_refresh"), style=discord.ButtonStyle.secondary, emoji=Icon.AUTORENEW, row=btn_row)
         btn_refresh.callback = self.on_refresh
         self.add_item(btn_refresh)
 
@@ -579,10 +615,18 @@ class QotdPanelView(BaseTimeoutView):
 
     async def on_approve_all(self, interaction: discord.Interaction):
         await interaction.response.defer()
+        channels = getattr(self, "channels", None)
+        if channels is None:
+            if hasattr(self.qotd, "get_qotd_channels"):
+                res = self.qotd.get_qotd_channels(self.guild_id)
+                channels = (await res) if inspect.isawaitable(res) else (res if isinstance(res, list) else [])
+            else:
+                channels = []
+        total_max_queue = sum((c.get("max_queue_limit") or MAX_QUEUE_QUESTIONS) for c in channels) if channels else MAX_QUEUE_QUESTIONS
         cur_queue = await self.qotd.get_queue_count(self.guild_id)
         cur_total = await self.qotd.get_total_question_count(self.guild_id)
-        if cur_queue >= MAX_QUEUE_QUESTIONS:
-            await interaction.followup.send(t(self.lang, "sugg_cannot_approve_queue", max_q=MAX_QUEUE_QUESTIONS), ephemeral=True)
+        if cur_queue >= total_max_queue:
+            await interaction.followup.send(t(self.lang, "sugg_cannot_approve_queue", max_q=total_max_queue), ephemeral=True)
             return
         if cur_total >= MAX_TOTAL_QUESTIONS:
             await interaction.followup.send(t(self.lang, "sugg_cannot_approve_total", max_total=MAX_TOTAL_QUESTIONS), ephemeral=True)
@@ -628,6 +672,22 @@ class QotdPanelView(BaseTimeoutView):
             description=t(self.lang, "change_lang_desc"),
             colour=COLOR_SETTINGS,
         )
+        await interaction.edit_original_response(embed=embed, view=view)
+
+    async def on_suggest_role_click(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        settings = await self.qotd.get_guild_settings(self.guild_id)
+        current_role_id = settings.get("suggest_role_id")
+        view = SuggestRoleSelectView(self.qotd, self.guild_id, current_role_id=current_role_id, lang=self.lang)
+        embed = discord.Embed(
+            title=f"{Icon.BULB} " + t(self.lang, "settings_suggest_role"),
+            description=t(self.lang, "settings_suggest_role_desc"),
+            colour=COLOR_SETTINGS,
+        )
+        if current_role_id:
+            embed.add_field(name=t(self.lang, "current_role_label"), value=f"<@&{current_role_id}>", inline=False)
+        else:
+            embed.add_field(name=t(self.lang, "current_role_label"), value=t(self.lang, "settings_everyone"), inline=False)
         await interaction.edit_original_response(embed=embed, view=view)
 
     async def on_page_first(self, interaction: discord.Interaction):
@@ -723,7 +783,7 @@ class LanguageSelectView(BaseTimeoutView):
         select_menu.callback = self.on_select_language
         self.add_item(select_menu)
 
-        btn_back = discord.ui.Button(label=t(self.lang, "btn_back"), style=discord.ButtonStyle.secondary, emoji="↩️", row=1)
+        btn_back = discord.ui.Button(label=t(self.lang, "btn_back"), style=discord.ButtonStyle.secondary, emoji=Icon.ARROW_LEFT, row=1)
         btn_back.callback = self.on_back
         self.add_item(btn_back)
 
@@ -769,7 +829,7 @@ class AddQotdChannelSelectView(BaseTimeoutView):
         self.chan_select.callback = self.on_channel_selected
         self.add_item(self.chan_select)
 
-        btn_back = discord.ui.Button(label=t(self.lang, "btn_back"), style=discord.ButtonStyle.secondary, emoji="↩️", row=1)
+        btn_back = discord.ui.Button(label=t(self.lang, "btn_back"), style=discord.ButtonStyle.secondary, emoji=Icon.ARROW_LEFT, row=1)
         btn_back.callback = self.on_back
         self.add_item(btn_back)
 
@@ -820,7 +880,7 @@ class AdminChannelSelectView(BaseTimeoutView):
         self.chan_select.callback = self.on_channel_selected
         self.add_item(self.chan_select)
 
-        btn_back = discord.ui.Button(label=t(self.lang, "btn_back"), style=discord.ButtonStyle.secondary, emoji="↩️", row=1)
+        btn_back = discord.ui.Button(label=t(self.lang, "btn_back"), style=discord.ButtonStyle.secondary, emoji=Icon.ARROW_LEFT, row=1)
         btn_back.callback = self.on_back
         self.add_item(btn_back)
 
@@ -838,7 +898,7 @@ class AdminChannelSelectView(BaseTimeoutView):
         channels = await self.qotd.get_qotd_channels(self.guild_id)
         view = QotdPanelView(self.qotd, section="settings", guild_id=self.guild_id, channels=channels, lang=self.lang)
         await interaction.edit_original_response(
-            content=f"✅ Admin review channel set to <#{channel_id}>.",
+            content=f"{Icon.CHECK} Admin review channel set to <#{channel_id}>.",
             embed=embed,
             view=view,
         )
@@ -859,23 +919,27 @@ class ChannelManageView(BaseTimeoutView):
         self.channel_id = channel_id
         self.lang = lang or qotd.get_user_language(None, guild_id)
 
-        btn_hour = discord.ui.Button(label=t(self.lang, "btn_manage_channel_hour"), style=discord.ButtonStyle.primary, emoji="⏰", row=0)
+        btn_hour = discord.ui.Button(label=t(self.lang, "btn_manage_channel_hour"), style=discord.ButtonStyle.primary, emoji=Icon.SCHEDULE, row=0)
         btn_hour.callback = self.on_hour
         self.add_item(btn_hour)
 
-        btn_role = discord.ui.Button(label=t(self.lang, "btn_manage_channel_role"), style=discord.ButtonStyle.secondary, emoji="🔔", row=0)
+        btn_role = discord.ui.Button(label=t(self.lang, "btn_manage_channel_role"), style=discord.ButtonStyle.secondary, emoji=Icon.NOTIFICATIONS, row=0)
         btn_role.callback = self.on_role
         self.add_item(btn_role)
 
-        btn_thresh = discord.ui.Button(label=t(self.lang, "btn_manage_channel_threshold"), style=discord.ButtonStyle.secondary, emoji="⚠️", row=0)
+        btn_thresh = discord.ui.Button(label=t(self.lang, "btn_manage_channel_threshold"), style=discord.ButtonStyle.secondary, emoji=Icon.SCHEDULE_PENDING, row=0)
         btn_thresh.callback = self.on_threshold
         self.add_item(btn_thresh)
 
-        btn_unlink = discord.ui.Button(label=t(self.lang, "btn_unlink_channel"), style=discord.ButtonStyle.danger, emoji="🗑️", row=1)
+        btn_max_queue = discord.ui.Button(label=t(self.lang, "btn_manage_channel_max_queue"), style=discord.ButtonStyle.secondary, emoji=Icon.HARD_DRIVE, row=0)
+        btn_max_queue.callback = self.on_max_queue
+        self.add_item(btn_max_queue)
+
+        btn_unlink = discord.ui.Button(label=t(self.lang, "btn_unlink_channel"), style=discord.ButtonStyle.danger, emoji=Icon.TRASH, row=1)
         btn_unlink.callback = self.on_unlink
         self.add_item(btn_unlink)
 
-        btn_back = discord.ui.Button(label=t(self.lang, "btn_back"), style=discord.ButtonStyle.secondary, emoji="↩️", row=1)
+        btn_back = discord.ui.Button(label=t(self.lang, "btn_back"), style=discord.ButtonStyle.secondary, emoji=Icon.ARROW_LEFT, row=1)
         btn_back.callback = self.on_back
         self.add_item(btn_back)
 
@@ -905,6 +969,13 @@ class ChannelManageView(BaseTimeoutView):
         c = await self.qotd.get_qotd_channel(self.channel_id)
         cur_thresh = (c.get("low_queue_threshold") or 3) if c else 3
         modal = QotdThresholdModal(self.qotd, self.guild_id, self.channel_id, cur_thresh, lang=self.lang)
+        await interaction.response.send_modal(modal)
+
+    async def on_max_queue(self, interaction: discord.Interaction):
+        c = await self.qotd.get_qotd_channel(self.channel_id)
+        cur_max = (c.get("max_queue_limit") or 500) if c else 500
+        from .modals import QotdMaxQueueModal
+        modal = QotdMaxQueueModal(self.qotd, self.guild_id, self.channel_id, cur_max, lang=self.lang)
         await interaction.response.send_modal(modal)
 
     async def on_unlink(self, interaction: discord.Interaction):
@@ -940,11 +1011,11 @@ class ChannelRoleSelectView(BaseTimeoutView):
         self.role_select.callback = self.on_role_selected
         self.add_item(self.role_select)
 
-        btn_clear = discord.ui.Button(label="Remove Role Mention", style=discord.ButtonStyle.danger, emoji="🚫", row=1)
+        btn_clear = discord.ui.Button(label="Remove Role Mention", style=discord.ButtonStyle.danger, emoji=Icon.CANCEL, row=1)
         btn_clear.callback = self.on_clear_role
         self.add_item(btn_clear)
 
-        btn_back = discord.ui.Button(label=t(self.lang, "btn_back"), style=discord.ButtonStyle.secondary, emoji="↩️", row=1)
+        btn_back = discord.ui.Button(label=t(self.lang, "btn_back"), style=discord.ButtonStyle.secondary, emoji=Icon.ARROW_LEFT, row=1)
         btn_back.callback = self.on_back
         self.add_item(btn_back)
 
@@ -960,19 +1031,73 @@ class ChannelRoleSelectView(BaseTimeoutView):
         await self.qotd.update_qotd_channel(self.channel_id, role_id=role_id)
         embed = await self.qotd.build_channel_manage_embed(self.guild_id, self.channel_id, lang=self.lang)
         view = ChannelManageView(self.qotd, self.guild_id, self.channel_id, lang=self.lang)
-        await interaction.edit_original_response(content=f"✅ Role updated to <@&{role_id}>.", embed=embed, view=view)
+        await interaction.edit_original_response(content=f"{Icon.CHECK} Role updated to <@&{role_id}>.", embed=embed, view=view)
 
     async def on_clear_role(self, interaction: discord.Interaction):
         await interaction.response.defer()
         await self.qotd.update_qotd_channel(self.channel_id, role_id=None)
         embed = await self.qotd.build_channel_manage_embed(self.guild_id, self.channel_id, lang=self.lang)
         view = ChannelManageView(self.qotd, self.guild_id, self.channel_id, lang=self.lang)
-        await interaction.edit_original_response(content="✅ Role mention removed.", embed=embed, view=view)
+        await interaction.edit_original_response(content=f"{Icon.CHECK} Role mention removed.", embed=embed, view=view)
 
     async def on_back(self, interaction: discord.Interaction):
         await interaction.response.defer()
         embed = await self.qotd.build_channel_manage_embed(self.guild_id, self.channel_id, lang=self.lang)
         view = ChannelManageView(self.qotd, self.guild_id, self.channel_id, lang=self.lang)
+        await interaction.edit_original_response(content=None, embed=embed, view=view)
+
+
+class SuggestRoleSelectView(BaseTimeoutView):
+    def __init__(self, qotd: "Qotd", guild_id: int, current_role_id: Optional[int] = None, lang: Optional[str] = None):
+        super().__init__(timeout=180)
+        self.qotd = qotd
+        self.guild_id = guild_id
+        self.current_role_id = current_role_id
+        self.lang = lang or qotd.get_user_language(None, guild_id)
+
+        self.role_select = discord.ui.RoleSelect(
+            placeholder=t(self.lang, "select_suggest_role_placeholder")[:100],
+            row=0,
+        )
+        self.role_select.callback = self.on_role_selected
+        self.add_item(self.role_select)
+
+        btn_clear = discord.ui.Button(label=t(self.lang, "btn_clear_suggest_role"), style=discord.ButtonStyle.danger, emoji=Icon.CANCEL, row=1)
+        btn_clear.callback = self.on_clear_role
+        self.add_item(btn_clear)
+
+        btn_back = discord.ui.Button(label=t(self.lang, "btn_back"), style=discord.ButtonStyle.secondary, emoji=Icon.ARROW_LEFT, row=1)
+        btn_back.callback = self.on_back
+        self.add_item(btn_back)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not is_admin(interaction):
+            await interaction.response.send_message(t(self.lang, "admin_only"), ephemeral=True)
+            return False
+        return True
+
+    async def on_role_selected(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        role_id = self.role_select.values[0].id
+        await self.qotd.update_guild_settings(self.guild_id, suggest_role_id=role_id)
+        embed = await self.qotd.build_settings_embed(self.guild_id, lang=self.lang)
+        channels = await self.qotd.get_qotd_channels(self.guild_id)
+        view = QotdPanelView(self.qotd, section="settings", guild_id=self.guild_id, channels=channels, lang=self.lang)
+        await interaction.edit_original_response(content=f"{Icon.CHECK} " + t(self.lang, "suggest_role_updated", role=f"<@&{role_id}>"), embed=embed, view=view)
+
+    async def on_clear_role(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        await self.qotd.update_guild_settings(self.guild_id, suggest_role_id=None)
+        embed = await self.qotd.build_settings_embed(self.guild_id, lang=self.lang)
+        channels = await self.qotd.get_qotd_channels(self.guild_id)
+        view = QotdPanelView(self.qotd, section="settings", guild_id=self.guild_id, channels=channels, lang=self.lang)
+        await interaction.edit_original_response(content=f"{Icon.CHECK} " + t(self.lang, "suggest_role_cleared"), embed=embed, view=view)
+
+    async def on_back(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        embed = await self.qotd.build_settings_embed(self.guild_id, lang=self.lang)
+        channels = await self.qotd.get_qotd_channels(self.guild_id)
+        view = QotdPanelView(self.qotd, section="settings", guild_id=self.guild_id, channels=channels, lang=self.lang)
         await interaction.edit_original_response(content=None, embed=embed, view=view)
 
 
@@ -984,15 +1109,15 @@ class UnlinkChannelConfirmView(BaseTimeoutView):
         self.channel_id = channel_id
         self.lang = lang or qotd.get_user_language(None, guild_id)
 
-        btn_keep = discord.ui.Button(label=t(self.lang, "btn_keep_questions"), style=discord.ButtonStyle.secondary, emoji="📦", row=0)
+        btn_keep = discord.ui.Button(label=t(self.lang, "btn_keep_questions"), style=discord.ButtonStyle.secondary, emoji=Icon.SAVE, row=0)
         btn_keep.callback = self.on_keep
         self.add_item(btn_keep)
 
-        btn_del = discord.ui.Button(label=t(self.lang, "btn_delete_questions"), style=discord.ButtonStyle.danger, emoji="🗑️", row=0)
+        btn_del = discord.ui.Button(label=t(self.lang, "btn_delete_questions"), style=discord.ButtonStyle.danger, emoji=Icon.TRASH, row=0)
         btn_del.callback = self.on_delete
         self.add_item(btn_del)
 
-        btn_cancel = discord.ui.Button(label=t(self.lang, "btn_cancel"), style=discord.ButtonStyle.secondary, emoji="↩️", row=0)
+        btn_cancel = discord.ui.Button(label=t(self.lang, "btn_cancel"), style=discord.ButtonStyle.secondary, emoji=Icon.CANCEL, row=0)
         btn_cancel.callback = self.on_cancel
         self.add_item(btn_cancel)
 
@@ -1050,24 +1175,24 @@ class QuestionDetailView(BaseTimeoutView):
         self.channel_id = channel_id or question_row.get("channel_id")
         self.lang = lang or qotd.get_user_language(None, guild_id)
 
-        btn_edit = discord.ui.Button(label=t(self.lang, "btn_edit_text"), style=discord.ButtonStyle.primary, emoji="✏️", row=0)
+        btn_edit = discord.ui.Button(label=t(self.lang, "btn_edit_text"), style=discord.ButtonStyle.primary, emoji=Icon.EDIT, row=0)
         btn_edit.callback = self.on_edit
         self.add_item(btn_edit)
 
         if self.status == "to_ask":
-            btn_send = discord.ui.Button(label=t(self.lang, "btn_send_now"), style=discord.ButtonStyle.success, emoji="⚡", row=0)
+            btn_send = discord.ui.Button(label=t(self.lang, "btn_send_now"), style=discord.ButtonStyle.success, emoji=Icon.SEND, row=0)
             btn_send.callback = self.on_send_now
             self.add_item(btn_send)
         else:
-            btn_requeue = discord.ui.Button(label=t(self.lang, "btn_requeue"), style=discord.ButtonStyle.success, emoji="🔄", row=0)
+            btn_requeue = discord.ui.Button(label=t(self.lang, "btn_requeue"), style=discord.ButtonStyle.success, emoji=Icon.AUTORENEW, row=0)
             btn_requeue.callback = self.on_requeue
             self.add_item(btn_requeue)
 
-        btn_del = discord.ui.Button(label=t(self.lang, "btn_delete"), style=discord.ButtonStyle.danger, emoji="🗑️", row=0)
+        btn_del = discord.ui.Button(label=t(self.lang, "btn_delete"), style=discord.ButtonStyle.danger, emoji=Icon.TRASH, row=0)
         btn_del.callback = self.on_delete
         self.add_item(btn_del)
 
-        btn_back = discord.ui.Button(label=t(self.lang, "btn_back"), style=discord.ButtonStyle.secondary, emoji="↩️", row=0)
+        btn_back = discord.ui.Button(label=t(self.lang, "btn_back"), style=discord.ButtonStyle.secondary, emoji=Icon.ARROW_LEFT, row=0)
         btn_back.callback = self.on_back
         self.add_item(btn_back)
 
@@ -1103,9 +1228,14 @@ class QuestionDetailView(BaseTimeoutView):
 
     async def on_requeue(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+        channel_max_limit = MAX_QUEUE_QUESTIONS
+        if self.channel_id:
+            ch_row = await self.qotd.get_qotd_channel(self.channel_id)
+            if ch_row and ch_row.get("max_queue_limit") is not None:
+                channel_max_limit = ch_row["max_queue_limit"]
         cur_queue = await self.qotd.get_queue_count(self.guild_id, self.channel_id)
-        if cur_queue >= MAX_QUEUE_QUESTIONS:
-            await interaction.followup.send(t(self.lang, "requeue_queue_full", max_q=MAX_QUEUE_QUESTIONS), ephemeral=True)
+        if cur_queue >= channel_max_limit:
+            await interaction.followup.send(t(self.lang, "requeue_queue_full", max_q=channel_max_limit), ephemeral=True)
             return
         if await self.qotd.requeue_question(self.guild_id, self.question_id, channel_id=self.channel_id):
             await interaction.followup.send(t(self.lang, "requeue_success"), ephemeral=True)
@@ -1165,7 +1295,7 @@ class SuggestionDeclinedView(BaseTimeoutView):
         btn_back = discord.ui.Button(
             label=t(self.lang, "btn_back_to_sugg"),
             style=discord.ButtonStyle.secondary,
-            emoji="↩️",
+            emoji=Icon.ARROW_LEFT,
             row=1,
         )
         btn_back.callback = self.on_back
@@ -1207,19 +1337,19 @@ class SuggestionDetailView(BaseTimeoutView):
         self.return_page = return_page
         self.lang = lang or qotd.get_user_language(None, guild_id)
 
-        btn_approve = discord.ui.Button(label=t(self.lang, "btn_approve"), style=discord.ButtonStyle.success, emoji="✅", row=0)
+        btn_approve = discord.ui.Button(label=t(self.lang, "btn_approve"), style=discord.ButtonStyle.success, emoji=Icon.CHECK, row=0)
         btn_approve.callback = self.on_approve
         self.add_item(btn_approve)
 
-        btn_edit = discord.ui.Button(label=t(self.lang, "btn_edit_approve"), style=discord.ButtonStyle.secondary, emoji="✏️", row=0)
+        btn_edit = discord.ui.Button(label=t(self.lang, "btn_edit_approve"), style=discord.ButtonStyle.secondary, emoji=Icon.EDIT, row=0)
         btn_edit.callback = self.on_edit
         self.add_item(btn_edit)
 
-        btn_decline = discord.ui.Button(label=t(self.lang, "btn_decline"), style=discord.ButtonStyle.danger, emoji="❌", row=0)
+        btn_decline = discord.ui.Button(label=t(self.lang, "btn_decline"), style=discord.ButtonStyle.danger, emoji=Icon.CANCEL, row=0)
         btn_decline.callback = self.on_decline
         self.add_item(btn_decline)
 
-        btn_back = discord.ui.Button(label=t(self.lang, "btn_back"), style=discord.ButtonStyle.secondary, emoji="↩️", row=0)
+        btn_back = discord.ui.Button(label=t(self.lang, "btn_back"), style=discord.ButtonStyle.secondary, emoji=Icon.ARROW_LEFT, row=0)
         btn_back.callback = self.on_back
         self.add_item(btn_back)
 
@@ -1231,19 +1361,37 @@ class SuggestionDetailView(BaseTimeoutView):
 
     async def on_approve(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        ok, reason = await self.qotd.accept_suggestion(self.guild_id, self.suggestion_id, added_by=interaction.user)
+        target_ch_id = self.suggestion_row.get("target_channel_id")
+        ok, reason = await self.qotd.accept_suggestion(self.guild_id, self.suggestion_id, added_by=interaction.user, target_channel_id=target_ch_id)
         if ok:
             await self.on_back(interaction)
         else:
             if reason == "queue_full":
-                await interaction.followup.send(t(self.lang, "sugg_cannot_approve_queue", max_q=MAX_QUEUE_QUESTIONS), ephemeral=True)
+                ch_limit = MAX_QUEUE_QUESTIONS
+                if target_ch_id:
+                    ch_row = await self.qotd.get_qotd_channel(target_ch_id)
+                    if ch_row and ch_row.get("max_queue_limit") is not None:
+                        ch_limit = ch_row["max_queue_limit"]
+                await interaction.followup.send(t(self.lang, "sugg_cannot_approve_queue", max_q=ch_limit), ephemeral=True)
             elif reason == "total_limit":
                 await interaction.followup.send(t(self.lang, "sugg_cannot_approve_total", max_total=MAX_TOTAL_QUESTIONS), ephemeral=True)
             else:
                 await interaction.followup.send(t(self.lang, "sugg_approve_failed"), ephemeral=True)
 
     async def on_edit(self, interaction: discord.Interaction):
-        modal = EditSuggestionModal(self.qotd, self.guild_id, self.suggestion_id, self.suggestion_row["question"], return_page=self.return_page, from_panel=True, lang=self.lang)
+        channels = await self.qotd.get_qotd_channels(self.guild_id)
+        target_ch_id = self.suggestion_row.get("target_channel_id")
+        modal = EditSuggestionModal(
+            self.qotd,
+            self.guild_id,
+            self.suggestion_id,
+            self.suggestion_row["question"],
+            channels=channels,
+            target_channel_id=target_ch_id,
+            return_page=self.return_page,
+            from_panel=True,
+            lang=self.lang,
+        )
         await interaction.response.send_modal(modal)
 
     async def on_decline(self, interaction: discord.Interaction):
@@ -1303,11 +1451,11 @@ class BulkDeleteSelectView(BaseTimeoutView):
         self.select_menu.callback = self.on_select_change
         self.add_item(self.select_menu)
 
-        btn_confirm = discord.ui.Button(label=t(self.lang, "btn_bulk_delete"), style=discord.ButtonStyle.danger, emoji="🗑️", row=1)
+        btn_confirm = discord.ui.Button(label=t(self.lang, "btn_bulk_delete"), style=discord.ButtonStyle.danger, emoji=Icon.TRASH, row=1)
         btn_confirm.callback = self.on_confirm_selected
         self.add_item(btn_confirm)
 
-        btn_cancel = discord.ui.Button(label=t(self.lang, "btn_cancel"), style=discord.ButtonStyle.secondary, emoji="↩️", row=1)
+        btn_cancel = discord.ui.Button(label=t(self.lang, "btn_cancel"), style=discord.ButtonStyle.secondary, emoji=Icon.CANCEL, row=1)
         btn_cancel.callback = self.on_cancel
         self.add_item(btn_cancel)
 
@@ -1395,7 +1543,7 @@ class SearchResultsView(BaseTimeoutView):
         select_menu.callback = self.on_select
         self.add_item(select_menu)
 
-        btn_back = discord.ui.Button(label=t(self.lang, "btn_back"), style=discord.ButtonStyle.secondary, emoji="↩️", row=1)
+        btn_back = discord.ui.Button(label=t(self.lang, "btn_back"), style=discord.ButtonStyle.secondary, emoji=Icon.ARROW_LEFT, row=1)
         btn_back.callback = self.on_back
         self.add_item(btn_back)
 
@@ -1444,11 +1592,11 @@ class ClearQuestionsConfirmView(BaseTimeoutView):
         self.channel_id = channel_id
         self.lang = lang or qotd.get_user_language(None, guild_id)
 
-        btn_confirm = discord.ui.Button(label=t(self.lang, "btn_yes_delete_all"), emoji="🗑️", style=discord.ButtonStyle.danger)
+        btn_confirm = discord.ui.Button(label=t(self.lang, "btn_yes_delete_all"), emoji=Icon.DELETE_FOREVER, style=discord.ButtonStyle.danger)
         btn_confirm.callback = self.confirm
         self.add_item(btn_confirm)
 
-        btn_cancel = discord.ui.Button(label=t(self.lang, "btn_cancel"), emoji="↩️", style=discord.ButtonStyle.secondary)
+        btn_cancel = discord.ui.Button(label=t(self.lang, "btn_cancel"), emoji=Icon.CANCEL, style=discord.ButtonStyle.secondary)
         btn_cancel.callback = self.cancel
         self.add_item(btn_cancel)
 

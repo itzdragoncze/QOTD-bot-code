@@ -137,10 +137,14 @@ class QotdDatabaseMixin:
             await self.db.execute("ALTER TABLE qotd_channels ADD COLUMN last_thread_id INTEGER DEFAULT NULL")
         if "qotd_number" not in chan_cols:
             await self.db.execute("ALTER TABLE qotd_channels ADD COLUMN qotd_number INTEGER NOT NULL DEFAULT 0")
+        if "max_queue_limit" not in chan_cols:
+            await self.db.execute("ALTER TABLE qotd_channels ADD COLUMN max_queue_limit INTEGER NOT NULL DEFAULT 500")
 
         settings_cols = await get_cols("settings")
         if "language" not in settings_cols:
             await self.db.execute("ALTER TABLE settings ADD COLUMN language TEXT NOT NULL DEFAULT 'en'")
+        if "suggest_role_id" not in settings_cols:
+            await self.db.execute("ALTER TABLE settings ADD COLUMN suggest_role_id INTEGER DEFAULT NULL")
 
         # Indexes
         await self.db.execute("CREATE INDEX IF NOT EXISTS idx_questions_guild_status ON questions(guild_id, status)")
@@ -301,6 +305,7 @@ class QotdDatabaseMixin:
     _VALID_CHANNEL_COLS = frozenset({
         "role_id", "scheduled_time", "low_queue_threshold",
         "last_posted_date", "last_thread_id", "qotd_number",
+        "max_queue_limit",
     })
 
     async def update_qotd_channel(self, channel_id: int, **kwargs):
@@ -333,11 +338,12 @@ class QotdDatabaseMixin:
                 "guild_id": guild_id,
                 "admin_channel_id": None,
                 "language": self.guild_languages.get(guild_id, DEFAULT_LANGUAGE),
+                "suggest_role_id": None,
             }
         return dict(row)
 
     _VALID_SETTINGS_COLS = frozenset({
-        "admin_channel_id", "language",
+        "admin_channel_id", "language", "suggest_role_id",
     })
 
     async def update_guild_settings(self, guild_id: int, **kwargs):
@@ -465,8 +471,13 @@ class QotdDatabaseMixin:
 
         if not bypass_queue_limit:
             queue_count = await self.get_queue_count(guild_id, channel_id=channel_id)
-            if queue_count >= MAX_QUEUE_QUESTIONS:
-                logger.warning("Queue limit reached for guild %s channel %s (%d/%d)", guild_id, channel_id, queue_count, MAX_QUEUE_QUESTIONS)
+            channel_max_limit = MAX_QUEUE_QUESTIONS
+            if channel_id:
+                ch_row = await self.get_qotd_channel(channel_id)
+                if ch_row and ch_row.get("max_queue_limit") is not None:
+                    channel_max_limit = ch_row["max_queue_limit"]
+            if queue_count >= channel_max_limit:
+                logger.warning("Queue limit reached for guild %s channel %s (%d/%d)", guild_id, channel_id, queue_count, channel_max_limit)
                 return None
 
         total_count = await self.get_total_question_count(guild_id)
@@ -514,7 +525,12 @@ class QotdDatabaseMixin:
 
     async def requeue_question(self, guild_id: int, question_id: int, channel_id: Optional[int] = None) -> bool:
         cur_queue = await self.get_queue_count(guild_id, channel_id=channel_id)
-        if cur_queue >= MAX_QUEUE_QUESTIONS:
+        channel_max_limit = MAX_QUEUE_QUESTIONS
+        if channel_id:
+            ch_row = await self.get_qotd_channel(channel_id)
+            if ch_row and ch_row.get("max_queue_limit") is not None:
+                channel_max_limit = ch_row["max_queue_limit"]
+        if cur_queue >= channel_max_limit:
             return False
         result = await self.db.execute(
             "UPDATE questions SET status = 'to_ask', asked_at = NULL WHERE guild_id = ? AND id = ?",
@@ -713,6 +729,25 @@ class QotdDatabaseMixin:
     ) -> Tuple[bool, str]:
         """Validates, creates, and dispatches a suggestion."""
         effective_lang = lang or (resolve_user_locale(user_locale) if user_locale else None) or self.get_server_language(guild_id)
+
+        # Check if server has a role requirement for suggestions
+        settings = await self.get_guild_settings(guild_id)
+        suggest_role_id = settings.get("suggest_role_id")
+        if suggest_role_id:
+            is_allowed = False
+            member = user if isinstance(user, discord.Member) else None
+            if member is None:
+                guild = self.bot.get_guild(guild_id)
+                if guild:
+                    member = guild.get_member(user.id)
+            if member:
+                if getattr(member.guild_permissions, "administrator", False) or getattr(member.guild_permissions, "manage_guild", False):
+                    is_allowed = True
+                elif any(r.id == suggest_role_id for r in member.roles):
+                    is_allowed = True
+            if not is_allowed:
+                return False, t(effective_lang, "sugg_role_required", role_id=suggest_role_id)
+
         parsed = parse_question_input(question_text)
         if not parsed:
             return False, t(effective_lang, "limit_empty_question")
@@ -825,15 +860,21 @@ class QotdDatabaseMixin:
         review_message: Optional[discord.Message] = None,
         added_by: Optional[Union[discord.Member, discord.User]] = None,
         interaction: Optional[discord.Interaction] = None,
+        target_channel_id: Optional[int] = None,
     ) -> Tuple[bool, str]:
         cursor = await self.db.execute("SELECT * FROM suggestions WHERE id = ? AND guild_id = ?", (suggestion_id, guild_id))
         pre_row = await cursor.fetchone()
         if not pre_row:
             return False, "not_found"
 
-        target_channel_id = pre_row["target_channel_id"]
-        queue_count = await self.get_queue_count(guild_id, channel_id=target_channel_id)
-        if queue_count >= MAX_QUEUE_QUESTIONS:
+        effective_target_ch = target_channel_id if target_channel_id is not None else pre_row["target_channel_id"]
+        queue_count = await self.get_queue_count(guild_id, channel_id=effective_target_ch)
+        channel_max_limit = MAX_QUEUE_QUESTIONS
+        if effective_target_ch:
+            ch_row = await self.get_qotd_channel(effective_target_ch)
+            if ch_row and ch_row.get("max_queue_limit") is not None:
+                channel_max_limit = ch_row["max_queue_limit"]
+        if queue_count >= channel_max_limit:
             return False, "queue_full"
 
         total_count = await self.get_total_question_count(guild_id)
@@ -859,7 +900,7 @@ class QotdDatabaseMixin:
             added_by=added_by,
             suggested_by_id=suggestion["user_id"],
             suggested_by_name=suggestion["user_name"],
-            channel_id=target_channel_id,
+            channel_id=effective_target_ch,
         )
 
         server_lang = self.get_server_language(guild_id)
@@ -911,22 +952,34 @@ class QotdDatabaseMixin:
             except Exception as err:
                 logger.debug("Failed to edit review message directly: %s", err)
 
+        # Check if suggestion was edited
+        orig_q = suggestion["question"].strip()
+        was_edited = (chosen_question != orig_q) or (target_channel_id is not None and target_channel_id != suggestion.get("target_channel_id"))
+
         # Notify suggester via DM (in suggester's language)
         try:
             user = self.bot.get_user(suggestion["user_id"]) or await self.bot.fetch_user(suggestion["user_id"])
             guild = self.bot.get_guild(guild_id)
             user_dm_lang = suggestion.get("language") or server_lang
 
-            ch_obj = self.bot.get_channel(target_channel_id) if target_channel_id else None
+            ch_obj = self.bot.get_channel(effective_target_ch) if effective_target_ch else None
             ch_name = f"#{ch_obj.name}" if ch_obj else ""
 
-            if ch_name:
-                dm_desc = t(user_dm_lang, "sugg_dm_approved_desc_chan", question=chosen_question, channel=ch_name)
+            if was_edited:
+                if ch_name:
+                    dm_desc = t(user_dm_lang, "sugg_dm_edited_desc_chan", question=chosen_question, orig_question=orig_q, channel=ch_name)
+                else:
+                    dm_desc = t(user_dm_lang, "sugg_dm_edited_desc", question=chosen_question, orig_question=orig_q)
+                dm_title = t(user_dm_lang, "sugg_dm_edited_title")
             else:
-                dm_desc = t(user_dm_lang, "sugg_dm_approved_desc", question=chosen_question)
+                if ch_name:
+                    dm_desc = t(user_dm_lang, "sugg_dm_approved_desc_chan", question=chosen_question, channel=ch_name)
+                else:
+                    dm_desc = t(user_dm_lang, "sugg_dm_approved_desc", question=chosen_question)
+                dm_title = t(user_dm_lang, "sugg_dm_approved_title")
 
             dm_embed = discord.Embed(
-                title=t(user_dm_lang, "sugg_dm_approved_title"),
+                title=dm_title,
                 description=dm_desc,
                 colour=discord.Colour.green(),
                 timestamp=datetime.now(timezone.utc),

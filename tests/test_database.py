@@ -3,14 +3,7 @@ import aiosqlite
 import pytest
 
 
-VALID_CHANNEL_COLS = frozenset({
-    "role_id", "scheduled_time", "low_queue_threshold",
-    "last_posted_date", "last_thread_id", "qotd_number",
-})
-
-VALID_SETTINGS_COLS = frozenset({
-    "admin_channel_id", "language",
-})
+from cogs.qotd.constants import VALID_CHANNEL_COLS, VALID_SETTINGS_COLS
 
 
 @pytest.mark.asyncio
