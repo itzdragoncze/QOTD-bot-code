@@ -113,6 +113,7 @@ To prevent database bloat, spamming, memory leaks, and malicious flooding, the b
 | **`MAX_USER_PENDING_SUGGESTIONS`** | **3 suggestions** | Maximum pending suggestions per individual member. Once staff reviews a user's suggestion, their slot is immediately freed. |
 | **`MAX_QUESTION_LENGTH`** | **300 characters** | Maximum character length for any single question. Prevents embed layout breaking and overly long wall-of-text submissions. |
 | **`MAX_BATCH_ADD_QUESTIONS`** | **50 questions** | Maximum questions that can be bulk-added in a single modal paste. Prevents rate-limit timeouts and oversized transactions. |
+| **`MAX_FILE_UPLOAD_QUESTIONS`** | **500 questions** | Maximum questions allowed when bulk-uploading from a `.txt` file. |
 | **`DEFAULT_LOW_QUEUE_THRESHOLD`** | **3 questions** | Alerts staff in the admin channel when a channel's active queue drops to or below this count. |
 
 ### Smart Duplicate Detection:

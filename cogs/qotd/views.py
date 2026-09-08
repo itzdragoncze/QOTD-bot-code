@@ -33,6 +33,10 @@ from .modals import (
     SearchQuestionsModal,
     QotdHourModal,
     QotdThresholdModal,
+    AddQotdChannelModal,
+    GuildSettingsModal,
+    ChannelSettingsModal,
+    UnlinkChannelModal,
 )
 
 class BaseTimeoutView(discord.ui.View):
@@ -488,17 +492,14 @@ class QotdPanelView(BaseTimeoutView):
             btn_add_chan.callback = self.on_add_channel_click
             self.add_item(btn_add_chan)
 
-            btn_admin_chan = discord.ui.Button(label=t(self.lang, "settings_admin_channel"), style=discord.ButtonStyle.secondary, emoji=Icon.SECURITY, row=2)
-            btn_admin_chan.callback = self.on_admin_channel_click
-            self.add_item(btn_admin_chan)
+            btn_settings = discord.ui.Button(label=t(self.lang, "btn_settings"), style=discord.ButtonStyle.secondary, emoji=Icon.SETTINGS, row=2)
+            btn_settings.callback = self.on_settings_click
+            self.add_item(btn_settings)
 
-            btn_lang = discord.ui.Button(label=t(self.lang, "btn_change_language"), style=discord.ButtonStyle.secondary, emoji=Icon.LANGUAGE, row=2)
-            btn_lang.callback = self.on_change_language
-            self.add_item(btn_lang)
-
-            btn_suggest_role = discord.ui.Button(label=t(self.lang, "settings_suggest_role"), style=discord.ButtonStyle.secondary, emoji=Icon.BULB, row=2)
-            btn_suggest_role.callback = self.on_suggest_role_click
-            self.add_item(btn_suggest_role)
+            if self.channels:
+                btn_unlink = discord.ui.Button(label=t(self.lang, "btn_unlink_channel"), style=discord.ButtonStyle.danger, emoji=Icon.TRASH, row=2)
+                btn_unlink.callback = self.on_unlink_channel_click
+                self.add_item(btn_unlink)
 
         # Row 4: Pagination & Refresh Controls
         btn_row = 4 if section in ("to_ask", "asked") else 3
@@ -535,21 +536,47 @@ class QotdPanelView(BaseTimeoutView):
         await self.qotd.show_menu_section(interaction, self.section, channel_id=new_channel_id, lang=self.lang)
 
     async def on_select_manage_channel(self, interaction: discord.Interaction):
-        await interaction.response.defer()
         selected_id = int(interaction.data["values"][0])
-        embed = await self.qotd.build_channel_manage_embed(self.guild_id, selected_id, lang=self.lang)
-        view = ChannelManageView(self.qotd, self.guild_id, selected_id, lang=self.lang)
-        await interaction.edit_original_response(embed=embed, view=view)
+        c = await self.qotd.get_qotd_channel(selected_id)
+        cur_time = (c.get("scheduled_time") or DEFAULT_SCHEDULED_TIME) if c else DEFAULT_SCHEDULED_TIME
+        cur_role = c.get("role_id") if c else None
+        cur_thresh = (c.get("low_queue_threshold") or 3) if c else 3
+        modal = ChannelSettingsModal(
+            self.qotd,
+            self.guild_id,
+            selected_id,
+            current_time=cur_time,
+            current_role_id=cur_role,
+            current_thresh=cur_thresh,
+            lang=self.lang,
+        )
+        await interaction.response.send_modal(modal)
+
+    async def on_unlink_channel_click(self, interaction: discord.Interaction):
+        if not self.channels:
+            return
+        modal = UnlinkChannelModal(self.qotd, self.guild_id, channels=self.channels, target_channel_id=self.channel_id, lang=self.lang)
+        await interaction.response.send_modal(modal)
 
     async def on_add_channel_click(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        view = AddQotdChannelSelectView(self.qotd, self.guild_id, lang=self.lang)
-        embed = discord.Embed(
-            title=t(self.lang, "btn_add_qotd_channel"),
-            description="Select a text channel from the dropdown below to register it as an active QOTD channel.",
-            colour=COLOR_SETTINGS,
+        modal = AddQotdChannelModal(self.qotd, self.guild_id, lang=self.lang)
+        await interaction.response.send_modal(modal)
+
+    async def on_settings_click(self, interaction: discord.Interaction):
+        guild_id = self.guild_id or (interaction.guild.id if interaction.guild else 0)
+        settings = await self.qotd.get_guild_settings(guild_id)
+        current_admin_id = settings.get("admin_channel_id") if settings else None
+        current_lang = self.qotd.get_server_language(guild_id)
+        current_role_id = settings.get("suggest_role_id") if settings else None
+        modal = GuildSettingsModal(
+            self.qotd,
+            guild_id,
+            current_admin_channel_id=current_admin_id,
+            current_language=current_lang,
+            current_suggest_role_id=current_role_id,
+            lang=self.lang,
         )
-        await interaction.edit_original_response(embed=embed, view=view)
+        await interaction.response.send_modal(modal)
 
     async def on_admin_channel_click(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -586,7 +613,14 @@ class QotdPanelView(BaseTimeoutView):
         await interaction.edit_original_response(embed=embed, view=view)
 
     async def on_add_questions(self, interaction: discord.Interaction):
-        modal = AddQuestionModal(self.qotd, self.guild_id, current_page=self.page, channel_id=self.channel_id, lang=self.lang)
+        channels = getattr(self, "channels", None) or await self.qotd.get_qotd_channels(self.guild_id)
+        if not channels:
+            await interaction.response.send_message(t(self.lang, "no_channels_configured"), ephemeral=True)
+            return
+        target_ch = self.channel_id
+        if target_ch not in [c["channel_id"] for c in channels]:
+            target_ch = channels[0]["channel_id"]
+        modal = AddQuestionModal(self.qotd, self.guild_id, current_page=self.page, channel_id=target_ch, lang=self.lang)
         await interaction.response.send_modal(modal)
 
     async def on_search(self, interaction: discord.Interaction):
@@ -622,26 +656,37 @@ class QotdPanelView(BaseTimeoutView):
                 channels = (await res) if inspect.isawaitable(res) else (res if isinstance(res, list) else [])
             else:
                 channels = []
-        total_max_queue = sum((c.get("max_queue_limit") or MAX_QUEUE_QUESTIONS) for c in channels) if channels else MAX_QUEUE_QUESTIONS
-        cur_queue = await self.qotd.get_queue_count(self.guild_id)
-        cur_total = await self.qotd.get_total_question_count(self.guild_id)
-        if cur_queue >= total_max_queue:
-            await interaction.followup.send(t(self.lang, "sugg_cannot_approve_queue", max_q=total_max_queue), ephemeral=True)
-            return
-        if cur_total >= MAX_TOTAL_QUESTIONS:
-            await interaction.followup.send(t(self.lang, "sugg_cannot_approve_total", max_total=MAX_TOTAL_QUESTIONS), ephemeral=True)
-            return
-
         cursor = await self.qotd.db.execute("SELECT * FROM suggestions WHERE guild_id = ? ORDER BY created_at ASC", (self.guild_id,))
         all_suggs = await cursor.fetchall()
         if not all_suggs:
             await interaction.followup.send(t(self.lang, "no_pending_suggestions"), ephemeral=True)
             return
 
+        approved_count = 0
+        skipped_queue_count = 0
+        skipped_total_count = 0
+
         for s in all_suggs:
-            ok, _ = await self.qotd.accept_suggestion(self.guild_id, s["id"], added_by=interaction.user)
-            if not ok:
+            ok, reason = await self.qotd.accept_suggestion(self.guild_id, s["id"], added_by=interaction.user)
+            if ok:
+                approved_count += 1
+            elif reason == "queue_full":
+                skipped_queue_count += 1
+            elif reason == "total_limit":
+                skipped_total_count += 1
                 break
+
+        if skipped_queue_count > 0 or skipped_total_count > 0:
+            msg_parts = []
+            if approved_count > 0:
+                msg_parts.append(f"✅ Approved **{approved_count}** suggestion(s).")
+            if skipped_queue_count > 0:
+                msg_parts.append(f"⚠️ Skipped **{skipped_queue_count}** suggestion(s) due to channel queue capacity.")
+            if skipped_total_count > 0:
+                msg_parts.append(f"⚠️ Skipped **{skipped_total_count}** suggestion(s) due to server total limit ({MAX_TOTAL_QUESTIONS}).")
+            await interaction.followup.send("\n".join(msg_parts), ephemeral=True)
+        elif approved_count == 0:
+            await interaction.followup.send(t(self.lang, "sugg_approve_failed"), ephemeral=True)
 
         await self.on_refresh(interaction)
 
@@ -919,27 +964,15 @@ class ChannelManageView(BaseTimeoutView):
         self.channel_id = channel_id
         self.lang = lang or qotd.get_user_language(None, guild_id)
 
-        btn_hour = discord.ui.Button(label=t(self.lang, "btn_manage_channel_hour"), style=discord.ButtonStyle.primary, emoji=Icon.SCHEDULE, row=0)
-        btn_hour.callback = self.on_hour
-        self.add_item(btn_hour)
+        btn_settings = discord.ui.Button(label=t(self.lang, "btn_settings"), style=discord.ButtonStyle.secondary, emoji=Icon.SETTINGS, row=0)
+        btn_settings.callback = self.on_settings_click
+        self.add_item(btn_settings)
 
-        btn_role = discord.ui.Button(label=t(self.lang, "btn_manage_channel_role"), style=discord.ButtonStyle.secondary, emoji=Icon.NOTIFICATIONS, row=0)
-        btn_role.callback = self.on_role
-        self.add_item(btn_role)
-
-        btn_thresh = discord.ui.Button(label=t(self.lang, "btn_manage_channel_threshold"), style=discord.ButtonStyle.secondary, emoji=Icon.SCHEDULE_PENDING, row=0)
-        btn_thresh.callback = self.on_threshold
-        self.add_item(btn_thresh)
-
-        btn_max_queue = discord.ui.Button(label=t(self.lang, "btn_manage_channel_max_queue"), style=discord.ButtonStyle.secondary, emoji=Icon.HARD_DRIVE, row=0)
-        btn_max_queue.callback = self.on_max_queue
-        self.add_item(btn_max_queue)
-
-        btn_unlink = discord.ui.Button(label=t(self.lang, "btn_unlink_channel"), style=discord.ButtonStyle.danger, emoji=Icon.TRASH, row=1)
+        btn_unlink = discord.ui.Button(label=t(self.lang, "btn_unlink_channel"), style=discord.ButtonStyle.danger, emoji=Icon.TRASH, row=0)
         btn_unlink.callback = self.on_unlink
         self.add_item(btn_unlink)
 
-        btn_back = discord.ui.Button(label=t(self.lang, "btn_back"), style=discord.ButtonStyle.secondary, emoji=Icon.ARROW_LEFT, row=1)
+        btn_back = discord.ui.Button(label=t(self.lang, "btn_back"), style=discord.ButtonStyle.secondary, emoji=Icon.ARROW_LEFT, row=0)
         btn_back.callback = self.on_back
         self.add_item(btn_back)
 
@@ -948,6 +981,22 @@ class ChannelManageView(BaseTimeoutView):
             await interaction.response.send_message(t(self.lang, "admin_only"), ephemeral=True)
             return False
         return True
+
+    async def on_settings_click(self, interaction: discord.Interaction):
+        c = await self.qotd.get_qotd_channel(self.channel_id)
+        cur_time = (c.get("scheduled_time") or DEFAULT_SCHEDULED_TIME) if c else DEFAULT_SCHEDULED_TIME
+        cur_role = c.get("role_id") if c else None
+        cur_thresh = (c.get("low_queue_threshold") or 3) if c else 3
+        modal = ChannelSettingsModal(
+            self.qotd,
+            self.guild_id,
+            self.channel_id,
+            current_time=cur_time,
+            current_role_id=cur_role,
+            current_thresh=cur_thresh,
+            lang=self.lang,
+        )
+        await interaction.response.send_modal(modal)
 
     async def on_hour(self, interaction: discord.Interaction):
         c = await self.qotd.get_qotd_channel(self.channel_id)
@@ -979,14 +1028,9 @@ class ChannelManageView(BaseTimeoutView):
         await interaction.response.send_modal(modal)
 
     async def on_unlink(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        view = UnlinkChannelConfirmView(self.qotd, self.guild_id, self.channel_id, lang=self.lang)
-        embed = discord.Embed(
-            title=t(self.lang, "unlink_confirm_title"),
-            description=t(self.lang, "unlink_confirm_desc", channel_id=self.channel_id),
-            colour=COLOR_DANGER,
-        )
-        await interaction.edit_original_response(embed=embed, view=view)
+        channels = await self.qotd.get_qotd_channels(self.guild_id)
+        modal = UnlinkChannelModal(self.qotd, self.guild_id, channels=channels, target_channel_id=self.channel_id, lang=self.lang)
+        await interaction.response.send_modal(modal)
 
     async def on_back(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -1153,8 +1197,57 @@ class UnlinkChannelConfirmView(BaseTimeoutView):
 
     async def on_cancel(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        embed = await self.qotd.build_channel_manage_embed(self.guild_id, self.channel_id, lang=self.lang)
-        view = ChannelManageView(self.qotd, self.guild_id, self.channel_id, lang=self.lang)
+        embed = await self.qotd.build_settings_embed(self.guild_id, lang=self.lang)
+        channels = await self.qotd.get_qotd_channels(self.guild_id)
+        view = QotdPanelView(self.qotd, section="settings", guild_id=self.guild_id, channels=channels, lang=self.lang)
+        await interaction.edit_original_response(content=None, embed=embed, view=view)
+
+
+class UnlinkChannelSelectView(BaseTimeoutView):
+    def __init__(self, qotd: "Qotd", guild_id: int, channels: List[Dict[str, Any]], lang: Optional[str] = None):
+        super().__init__(timeout=180)
+        self.qotd = qotd
+        self.guild_id = guild_id
+        self.channels = channels
+        self.lang = lang or qotd.get_user_language(None, guild_id)
+
+        options = []
+        for c in channels[:25]:
+            cid = c["channel_id"]
+            ch_obj = qotd.bot.get_channel(cid)
+            c_name = ch_obj.name if ch_obj else str(cid)
+            options.append(discord.SelectOption(label=f"#{c_name}", value=str(cid)))
+
+        select = discord.ui.Select(placeholder=t(self.lang, "select_channel_manage_placeholder")[:100], options=options, row=0)
+        select.callback = self.on_select
+        self.add_item(select)
+
+        btn_back = discord.ui.Button(label=t(self.lang, "btn_back"), style=discord.ButtonStyle.secondary, emoji=Icon.ARROW_LEFT, row=1)
+        btn_back.callback = self.on_back
+        self.add_item(btn_back)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not is_admin(interaction):
+            await interaction.response.send_message(t(self.lang, "admin_only"), ephemeral=True)
+            return False
+        return True
+
+    async def on_select(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        channel_id = int(interaction.data["values"][0])
+        view = UnlinkChannelConfirmView(self.qotd, self.guild_id, channel_id, lang=self.lang)
+        embed = discord.Embed(
+            title=t(self.lang, "unlink_confirm_title"),
+            description=t(self.lang, "unlink_confirm_desc", channel_id=channel_id),
+            colour=COLOR_DANGER,
+        )
+        await interaction.edit_original_response(content=None, embed=embed, view=view)
+
+    async def on_back(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        embed = await self.qotd.build_settings_embed(self.guild_id, lang=self.lang)
+        channels = await self.qotd.get_qotd_channels(self.guild_id)
+        view = QotdPanelView(self.qotd, section="settings", guild_id=self.guild_id, channels=channels, lang=self.lang)
         await interaction.edit_original_response(content=None, embed=embed, view=view)
 
 
@@ -1228,16 +1321,22 @@ class QuestionDetailView(BaseTimeoutView):
 
     async def on_requeue(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+        effective_ch = self.channel_id or self.question_row.get("channel_id")
+        if effective_ch is None:
+            channels = await self.qotd.get_qotd_channels(self.guild_id)
+            if len(channels) == 1:
+                effective_ch = channels[0]["channel_id"]
+
         channel_max_limit = MAX_QUEUE_QUESTIONS
-        if self.channel_id:
-            ch_row = await self.qotd.get_qotd_channel(self.channel_id)
+        if effective_ch:
+            ch_row = await self.qotd.get_qotd_channel(effective_ch)
             if ch_row and ch_row.get("max_queue_limit") is not None:
                 channel_max_limit = ch_row["max_queue_limit"]
-        cur_queue = await self.qotd.get_queue_count(self.guild_id, self.channel_id)
+        cur_queue = await self.qotd.get_queue_count(self.guild_id, effective_ch)
         if cur_queue >= channel_max_limit:
             await interaction.followup.send(t(self.lang, "requeue_queue_full", max_q=channel_max_limit), ephemeral=True)
             return
-        if await self.qotd.requeue_question(self.guild_id, self.question_id, channel_id=self.channel_id):
+        if await self.qotd.requeue_question(self.guild_id, self.question_id, channel_id=effective_ch):
             await interaction.followup.send(t(self.lang, "requeue_success"), ephemeral=True)
             await self.on_back(interaction)
         else:

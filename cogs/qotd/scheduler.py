@@ -96,7 +96,14 @@ class QotdSchedulerMixin:
                 final_question = queued_row["question"]
             elif manual_question:
                 final_question = manual_question.strip()[:MAX_QUESTION_LENGTH]
-                qid = await self.add_question(guild_id, final_question, source="manual", bypass_queue_limit=True, channel_id=channel_id)
+                qid = await self.add_question(
+                    guild_id,
+                    final_question,
+                    source="manual",
+                    bypass_queue_limit=True,
+                    channel_id=channel_id,
+                    bypass_total_limit=True,
+                )
                 if not qid:
                     return False
                 queued_row = await self.get_question(guild_id, qid)

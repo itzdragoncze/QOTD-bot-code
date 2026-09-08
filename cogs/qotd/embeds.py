@@ -243,9 +243,6 @@ class QotdEmbedsMixin:
         thresh = c.get("low_queue_threshold") or 3
         embed.add_field(name=f"{Icon.SCHEDULE_PENDING} " + t(effective_lang, "btn_manage_channel_threshold"), value=f"**{thresh}** questions", inline=True)
 
-        max_q = c.get("max_queue_limit") or 500
-        embed.add_field(name=f"{Icon.HARD_DRIVE} " + t(effective_lang, "btn_manage_channel_max_queue"), value=f"**{max_q}** questions", inline=True)
-
         q_count = await self.get_queue_count(guild_id, channel_id=channel_id)
         h_count = await self.get_total_question_count(guild_id, channel_id=channel_id) - q_count
         embed.add_field(name=f"{Icon.HARD_DRIVE} Queue / History", value=f"Queue: **{q_count}** | History: **{h_count}**", inline=True)

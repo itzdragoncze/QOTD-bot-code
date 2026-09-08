@@ -285,15 +285,16 @@ class QotdDatabaseMixin:
         role_id: Optional[int] = None,
         scheduled_time: str = DEFAULT_SCHEDULED_TIME,
         low_queue_threshold: int = 3,
+        last_posted_date: Optional[str] = None,
     ) -> int:
         now_iso = datetime.now(timezone.utc).isoformat()
         cursor = await self.db.execute(
             """
             INSERT INTO qotd_channels (
-                guild_id, channel_id, role_id, scheduled_time, low_queue_threshold, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                guild_id, channel_id, role_id, scheduled_time, low_queue_threshold, created_at, last_posted_date
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (guild_id, channel_id, role_id, scheduled_time, low_queue_threshold, now_iso),
+            (guild_id, channel_id, role_id, scheduled_time, low_queue_threshold, now_iso, last_posted_date),
         )
         await self.db.commit()
 
@@ -320,10 +321,19 @@ class QotdDatabaseMixin:
         await self.db.commit()
 
     async def delete_qotd_channel(self, channel_id: int, delete_questions: bool = False):
+        cursor = await self.db.execute("SELECT guild_id FROM qotd_channels WHERE channel_id = ?", (channel_id,))
+        row = await cursor.fetchone()
+        guild_id = row[0] if row else None
+
         await self.db.execute("DELETE FROM qotd_channels WHERE channel_id = ?", (channel_id,))
         if delete_questions:
             await self.db.execute("DELETE FROM questions WHERE channel_id = ?", (channel_id,))
             await self.db.execute("DELETE FROM suggestions WHERE target_channel_id = ?", (channel_id,))
+            if guild_id:
+                rem_cursor = await self.db.execute("SELECT COUNT(*) FROM qotd_channels WHERE guild_id = ?", (guild_id,))
+                rem_row = await rem_cursor.fetchone()
+                if rem_row and rem_row[0] == 0:
+                    await self.db.execute("DELETE FROM questions WHERE guild_id = ? AND channel_id IS NULL", (guild_id,))
         await self.db.commit()
 
     # -----------------------------------------------------------------------
@@ -462,12 +472,18 @@ class QotdDatabaseMixin:
         suggested_by_name: Optional[str] = None,
         bypass_queue_limit: bool = False,
         channel_id: Optional[int] = None,
+        bypass_total_limit: bool = False,
     ) -> Optional[int]:
         question_clean = question.strip()
         if not question_clean:
             return None
         if len(question_clean) > MAX_QUESTION_LENGTH:
             question_clean = question_clean[:MAX_QUESTION_LENGTH]
+
+        if channel_id is None:
+            channels = await self.get_qotd_channels(guild_id)
+            if len(channels) == 1:
+                channel_id = channels[0]["channel_id"]
 
         if not bypass_queue_limit:
             queue_count = await self.get_queue_count(guild_id, channel_id=channel_id)
@@ -480,14 +496,22 @@ class QotdDatabaseMixin:
                 logger.warning("Queue limit reached for guild %s channel %s (%d/%d)", guild_id, channel_id, queue_count, channel_max_limit)
                 return None
 
-        total_count = await self.get_total_question_count(guild_id)
-        if total_count >= MAX_TOTAL_QUESTIONS:
-            logger.warning("Total questions limit reached for guild %s (%d/%d)", guild_id, total_count, MAX_TOTAL_QUESTIONS)
-            return None
+        if not bypass_total_limit:
+            total_count = await self.get_total_question_count(guild_id)
+            if total_count >= MAX_TOTAL_QUESTIONS:
+                logger.warning("Total questions limit reached for guild %s (%d/%d)", guild_id, total_count, MAX_TOTAL_QUESTIONS)
+                return None
 
         added_by_name = (getattr(added_by, "display_name", None) or getattr(added_by, "name", None) or str(added_by)) if added_by else None
         if added_by_name is not None and not isinstance(added_by_name, str):
             added_by_name = str(added_by_name)
+        user_id = None
+        if added_by and hasattr(added_by, "id"):
+            try:
+                user_id = int(added_by.id)
+            except (ValueError, TypeError):
+                user_id = None
+
         cursor = await self.db.execute(
             """
             INSERT INTO questions (
@@ -502,7 +526,7 @@ class QotdDatabaseMixin:
                 normalize_question(question_clean),
                 source,
                 datetime.now(timezone.utc).isoformat(),
-                added_by.id if added_by else None,
+                user_id,
                 added_by_name,
                 suggested_by_id,
                 suggested_by_name,
@@ -510,6 +534,79 @@ class QotdDatabaseMixin:
         )
         await self.db.commit()
         return cursor.lastrowid
+
+    async def add_multiple_questions(
+        self,
+        guild_id: int,
+        questions: List[str],
+        source: str = "manual",
+        added_by: Optional[Union[discord.Member, discord.User]] = None,
+        channel_id: Optional[int] = None,
+    ) -> Tuple[List[int], int, Optional[str]]:
+        """
+        Atomically adds multiple questions to queue in a single transaction,
+        strictly respecting per-channel queue limit and server total question limit.
+        Returns (added_qids, skipped_capacity_count, limit_reason).
+        """
+        cleaned = [q.strip()[:MAX_QUESTION_LENGTH] for q in questions if q.strip()]
+        if not cleaned:
+            return [], 0, None
+
+        if channel_id is None:
+            channels = await self.get_qotd_channels(guild_id)
+            if len(channels) == 1:
+                channel_id = channels[0]["channel_id"]
+
+        channel_max_limit = MAX_QUEUE_QUESTIONS
+        if channel_id:
+            ch_row = await self.get_qotd_channel(channel_id)
+            if ch_row and ch_row.get("max_queue_limit") is not None:
+                channel_max_limit = ch_row["max_queue_limit"]
+
+        queue_count = await self.get_queue_count(guild_id, channel_id=channel_id)
+        total_count = await self.get_total_question_count(guild_id)
+
+        avail_queue = max(0, channel_max_limit - queue_count)
+        avail_total = max(0, MAX_TOTAL_QUESTIONS - total_count)
+        avail_slots = min(avail_queue, avail_total)
+
+        if avail_slots <= 0:
+            limit_reason = "total_limit" if avail_total <= 0 else "queue_full"
+            return [], len(cleaned), limit_reason
+
+        to_insert = cleaned[:avail_slots]
+        skipped_capacity = len(cleaned) - len(to_insert)
+        limit_reason = None
+        if skipped_capacity > 0:
+            limit_reason = "total_limit" if avail_total < avail_queue else "queue_full"
+
+        added_by_name = (getattr(added_by, "display_name", None) or getattr(added_by, "name", None) or str(added_by)) if added_by else None
+        if added_by_name is not None and not isinstance(added_by_name, str):
+            added_by_name = str(added_by_name)
+        now_str = datetime.now(timezone.utc).isoformat()
+        user_id = None
+        if added_by and hasattr(added_by, "id"):
+            try:
+                user_id = int(added_by.id)
+            except (ValueError, TypeError):
+                user_id = None
+
+        added_qids: List[int] = []
+        for q in to_insert:
+            cursor = await self.db.execute(
+                """
+                INSERT INTO questions (
+                    guild_id, channel_id, question, normalized_text, status, source, created_at,
+                    added_by_id, added_by_name
+                ) VALUES (?, ?, ?, ?, 'to_ask', ?, ?, ?, ?)
+                """,
+                (guild_id, channel_id, q, normalize_question(q), source, now_str, user_id, added_by_name),
+            )
+            if cursor.lastrowid:
+                added_qids.append(cursor.lastrowid)
+
+        await self.db.commit()
+        return added_qids, skipped_capacity, limit_reason
 
     async def get_question(self, guild_id: int, question_id: int) -> Optional[Dict[str, Any]]:
         cursor = await self.db.execute("SELECT * FROM questions WHERE guild_id = ? AND id = ?", (guild_id, question_id))
@@ -524,17 +621,28 @@ class QotdDatabaseMixin:
         await self.db.commit()
 
     async def requeue_question(self, guild_id: int, question_id: int, channel_id: Optional[int] = None) -> bool:
-        cur_queue = await self.get_queue_count(guild_id, channel_id=channel_id)
+        q_row = await self.get_question(guild_id, question_id)
+        if not q_row:
+            return False
+
+        effective_ch = channel_id or q_row.get("channel_id")
+        if effective_ch is None:
+            channels = await self.get_qotd_channels(guild_id)
+            if len(channels) == 1:
+                effective_ch = channels[0]["channel_id"]
+
+        cur_queue = await self.get_queue_count(guild_id, channel_id=effective_ch)
         channel_max_limit = MAX_QUEUE_QUESTIONS
-        if channel_id:
-            ch_row = await self.get_qotd_channel(channel_id)
+        if effective_ch:
+            ch_row = await self.get_qotd_channel(effective_ch)
             if ch_row and ch_row.get("max_queue_limit") is not None:
                 channel_max_limit = ch_row["max_queue_limit"]
         if cur_queue >= channel_max_limit:
             return False
+
         result = await self.db.execute(
-            "UPDATE questions SET status = 'to_ask', asked_at = NULL WHERE guild_id = ? AND id = ?",
-            (guild_id, question_id),
+            "UPDATE questions SET status = 'to_ask', asked_at = NULL, channel_id = COALESCE(?, channel_id) WHERE guild_id = ? AND id = ?",
+            (effective_ch, guild_id, question_id),
         )
         await self.db.commit()
         return result.rowcount > 0
@@ -867,13 +975,22 @@ class QotdDatabaseMixin:
         if not pre_row:
             return False, "not_found"
 
+        channels = await self.get_qotd_channels(guild_id)
+        if not channels:
+            return False, "no_channels"
+        active_ch_ids = [c["channel_id"] for c in channels]
         effective_target_ch = target_channel_id if target_channel_id is not None else pre_row["target_channel_id"]
+        if effective_target_ch not in active_ch_ids:
+            if len(channels) == 1:
+                effective_target_ch = channels[0]["channel_id"]
+            else:
+                return False, "channel_invalid"
+
         queue_count = await self.get_queue_count(guild_id, channel_id=effective_target_ch)
         channel_max_limit = MAX_QUEUE_QUESTIONS
-        if effective_target_ch:
-            ch_row = await self.get_qotd_channel(effective_target_ch)
-            if ch_row and ch_row.get("max_queue_limit") is not None:
-                channel_max_limit = ch_row["max_queue_limit"]
+        ch_row = await self.get_qotd_channel(effective_target_ch)
+        if ch_row and ch_row.get("max_queue_limit") is not None:
+            channel_max_limit = ch_row["max_queue_limit"]
         if queue_count >= channel_max_limit:
             return False, "queue_full"
 
@@ -881,7 +998,7 @@ class QotdDatabaseMixin:
         if total_count >= MAX_TOTAL_QUESTIONS:
             return False, "total_limit"
 
-        # Atomically claim the suggestion to prevent race conditions
+        # Atomically claim the suggestion and insert into questions in the same transaction
         cursor = await self.db.execute(
             "DELETE FROM suggestions WHERE id = ? AND guild_id = ? RETURNING *",
             (suggestion_id, guild_id),
@@ -890,18 +1007,33 @@ class QotdDatabaseMixin:
         if not row:
             return False, "not_found"
         suggestion = dict(row)
-        await self.db.commit()
 
         chosen_question = (question or suggestion["question"]).strip()[:MAX_QUESTION_LENGTH]
-        await self.add_question(
-            guild_id,
-            chosen_question,
-            source="suggestion",
-            added_by=added_by,
-            suggested_by_id=suggestion["user_id"],
-            suggested_by_name=suggestion["user_name"],
-            channel_id=effective_target_ch,
+        added_by_name = (getattr(added_by, "display_name", None) or getattr(added_by, "name", None) or str(added_by)) if added_by else None
+        if added_by_name is not None and not isinstance(added_by_name, str):
+            added_by_name = str(added_by_name)
+        now_str = datetime.now(timezone.utc).isoformat()
+
+        await self.db.execute(
+            """
+            INSERT INTO questions (
+                guild_id, channel_id, question, normalized_text, status, source, created_at,
+                added_by_id, added_by_name, suggested_by_id, suggested_by_name
+            ) VALUES (?, ?, ?, ?, 'to_ask', 'suggestion', ?, ?, ?, ?, ?)
+            """,
+            (
+                guild_id,
+                effective_target_ch,
+                chosen_question,
+                normalize_question(chosen_question),
+                now_str,
+                added_by.id if added_by else None,
+                added_by_name,
+                suggestion["user_id"],
+                suggestion["user_name"],
+            ),
         )
+        await self.db.commit()
 
         server_lang = self.get_server_language(guild_id)
 

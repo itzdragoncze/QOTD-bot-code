@@ -70,6 +70,7 @@ MAX_PENDING_SUGGESTIONS = 100      # Max pending suggestions in server review ma
 MAX_USER_PENDING_SUGGESTIONS = 3   # Max pending suggestions per individual user
 MAX_QUESTION_LENGTH = 300          # Max character length for any single question
 MAX_BATCH_ADD_QUESTIONS = 50       # Max questions allowed in a single bulk paste
+MAX_FILE_UPLOAD_QUESTIONS = 500    # Max questions allowed in an uploaded .txt file
 
 # Brand colors for clean visual distinction
 COLOR_QUEUE = discord.Colour(16760576)                  # Amber / Gold
